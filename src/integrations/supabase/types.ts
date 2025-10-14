@@ -22,6 +22,7 @@ export type Database = {
           id: string
           is_active: boolean | null
           last_name: string
+          logo_path: string | null
           phone: string
           updated_at: string
         }
@@ -32,6 +33,7 @@ export type Database = {
           id?: string
           is_active?: boolean | null
           last_name: string
+          logo_path?: string | null
           phone: string
           updated_at?: string
         }
@@ -42,6 +44,7 @@ export type Database = {
           id?: string
           is_active?: boolean | null
           last_name?: string
+          logo_path?: string | null
           phone?: string
           updated_at?: string
         }

@@ -67,54 +67,132 @@ serve(async (req) => {
 
     console.log('CV file downloaded, extracting data with AI...');
 
-    // Note: Pour l'instant, on crée des données structurées par défaut
-    // TODO: Implémenter l'extraction OCR/texte pour une vraie analyse
-    console.log('Creating structured data from CV...');
+    // Convertir le PDF en base64 pour l'envoyer à l'IA
+    console.log('Converting CV to base64...');
+    const arrayBuffer = await cvFileData.arrayBuffer();
+    const bytes = new Uint8Array(arrayBuffer);
+    
+    // Conversion en base64 par chunks pour éviter les problèmes de mémoire
+    let base64 = '';
+    const chunkSize = 1024 * 1024; // 1MB chunks
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+      const chunk = bytes.slice(i, i + chunkSize);
+      const binaryString = Array.from(chunk)
+        .map(byte => String.fromCharCode(byte))
+        .join('');
+      base64 += btoa(binaryString);
+    }
 
-    const extractedData = {
-      personal: {
-        first_name: "Prénom",
-        last_name: "Nom",
-        anonymized_first: "P.",
-        anonymized_last: "N.",
-        title: "Professionnel",
-        years_experience: 5
-      },
-      key_projects: [
-        {
-          title: "Projet 1",
-          role: "Rôle",
-          description: "Description du projet"
-        }
-      ],
-      skills: {
-        technical: ["Compétence 1", "Compétence 2"],
-        tools: ["Outil 1", "Outil 2"],
-        languages: ["Français", "Anglais"],
-        certifications: []
-      },
-      education: [
-        {
-          degree: "Diplôme",
-          institution: "Institution",
-          year: "2020",
-          field: "Domaine"
-        }
-      ],
-      missions: [
-        {
-          client: "Client",
-          date_start: "2020-01",
-          date_end: "2021-12",
-          role: "Poste",
-          context: "Contexte de la mission",
-          achievements: ["Réalisation 1", "Réalisation 2"],
-          environment: ["Tech 1", "Tech 2"]
-        }
-      ]
-    };
+    console.log('CV converted to base64, extracting data with AI...');
 
-    console.log('Structured data created');
+    // Extraction avec l'IA
+    const systemPrompt = `Tu es un expert en extraction de données de CV. Analyse ce CV et extrais TOUTES les informations de manière structurée.
+
+IMPORTANT : 
+1. Extrais les informations personnelles (nom, prénom, titre, années d'expérience)
+2. Pour l'ANONYMISATION, génère des initiales : première lettre du prénom suivie d'un point, première lettre du nom suivie d'un point
+3. Extrais TOUS les projets clés avec titre, rôle et description détaillée
+4. Extrais TOUTES les compétences : techniques, outils, langues, certifications
+5. Extrais TOUTE la formation : diplômes, institutions, années, domaines
+6. Extrais TOUTES les missions : client, dates, rôle, contexte, réalisations, environnement technique
+
+Retourne un JSON avec cette structure EXACTE :
+{
+  "personal": {
+    "first_name": "prénom extrait",
+    "last_name": "nom extrait",
+    "anonymized_first": "première lettre du prénom + point (ex: J.)",
+    "anonymized_last": "première lettre du nom + point (ex: D.)",
+    "title": "titre professionnel",
+    "years_experience": nombre_années
+  },
+  "key_projects": [
+    {
+      "title": "titre du projet",
+      "role": "rôle dans le projet",
+      "description": "description détaillée"
+    }
+  ],
+  "skills": {
+    "technical": ["compétence1", "compétence2"],
+    "tools": ["outil1", "outil2"],
+    "languages": ["langue1", "langue2"],
+    "certifications": ["cert1", "cert2"]
+  },
+  "education": [
+    {
+      "degree": "diplôme",
+      "institution": "établissement",
+      "year": "année",
+      "field": "domaine"
+    }
+  ],
+  "missions": [
+    {
+      "client": "nom client",
+      "date_start": "YYYY-MM",
+      "date_end": "YYYY-MM ou 'Présent'",
+      "role": "poste occupé",
+      "context": "contexte de la mission",
+      "achievements": ["réalisation1", "réalisation2"],
+      "environment": ["tech1", "tech2"]
+    }
+  ]
+}`;
+
+    const aiResponse = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${lovableApiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'google/gemini-2.5-pro',
+        messages: [
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: systemPrompt },
+              {
+                type: 'image_url',
+                image_url: {
+                  url: `data:application/pdf;base64,${base64}`
+                }
+              }
+            ]
+          }
+        ],
+        temperature: 0.1,
+      }),
+    });
+
+    if (!aiResponse.ok) {
+      const errorText = await aiResponse.text();
+      console.error('AI API error:', aiResponse.status, errorText);
+      throw new Error('AI extraction failed');
+    }
+
+    const aiData = await aiResponse.json();
+    const content = aiData.choices?.[0]?.message?.content;
+
+    if (!content) {
+      throw new Error('No content in AI response');
+    }
+
+    console.log('AI extraction response:', content);
+
+    // Parser la réponse JSON
+    let extractedData;
+    try {
+      // Extraire le JSON de la réponse (peut être entouré de ```json ... ```)
+      const jsonMatch = content.match(/```json\s*([\s\S]*?)\s*```/) || content.match(/\{[\s\S]*\}/);
+      const jsonStr = jsonMatch ? (jsonMatch[1] || jsonMatch[0]) : content;
+      extractedData = JSON.parse(jsonStr);
+      console.log('Successfully parsed extracted data');
+    } catch (parseError) {
+      console.error('Error parsing AI response:', parseError);
+      throw new Error('Failed to parse AI extraction result');
+    }
 
     // Logger le succès
     await supabase.from('processing_logs').insert({

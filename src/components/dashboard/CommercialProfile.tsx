@@ -3,7 +3,7 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { User, Save, Loader2 } from "lucide-react";
+import { User, Save, Loader2, Upload, X } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 
@@ -13,12 +13,15 @@ interface CommercialProfile {
   last_name: string;
   phone: string;
   email: string;
+  logo_path: string | null;
 }
 
 export const CommercialProfile = () => {
   const [profile, setProfile] = useState<CommercialProfile | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
+  const [isUploadingLogo, setIsUploadingLogo] = useState(false);
+  const [logoPreview, setLogoPreview] = useState<string | null>(null);
   const [formData, setFormData] = useState({
     first_name: "",
     last_name: "",
@@ -52,6 +55,14 @@ export const CommercialProfile = () => {
           phone: data.phone,
           email: data.email,
         });
+        
+        // Charger l'aperçu du logo si disponible
+        if (data.logo_path) {
+          const { data: urlData } = supabase.storage
+            .from('cv-uploads')
+            .getPublicUrl(data.logo_path);
+          setLogoPreview(urlData.publicUrl);
+        }
       }
     } catch (error) {
       console.error('Error fetching profile:', error);
@@ -110,6 +121,117 @@ export const CommercialProfile = () => {
     }
   };
 
+  const handleLogoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // Vérifier le type de fichier
+    const allowedTypes = ['image/png', 'image/jpeg', 'image/jpg', 'image/svg+xml'];
+    if (!allowedTypes.includes(file.type)) {
+      toast({
+        variant: "destructive",
+        title: "Format non supporté",
+        description: "Veuillez uploader une image PNG, JPG ou SVG",
+      });
+      return;
+    }
+
+    // Vérifier la taille (max 5MB)
+    if (file.size > 5 * 1024 * 1024) {
+      toast({
+        variant: "destructive",
+        title: "Fichier trop volumineux",
+        description: "Le logo ne doit pas dépasser 5 Mo",
+      });
+      return;
+    }
+
+    setIsUploadingLogo(true);
+
+    try {
+      const timestamp = Date.now();
+      const randomString = Math.random().toString(36).substring(7);
+      const fileExt = file.name.split('.').pop();
+      const fileName = `logo-${timestamp}-${randomString}.${fileExt}`;
+      const filePath = fileName;
+
+      // Upload vers Supabase Storage
+      const { error: uploadError } = await supabase.storage
+        .from('cv-uploads')
+        .upload(filePath, file);
+
+      if (uploadError) throw uploadError;
+
+      // Mettre à jour le profil avec le chemin du logo
+      if (profile) {
+        const { error: updateError } = await supabase
+          .from('commercial_profiles')
+          .update({ logo_path: filePath })
+          .eq('id', profile.id);
+
+        if (updateError) throw updateError;
+      }
+
+      // Créer l'aperçu local
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setLogoPreview(reader.result as string);
+      };
+      reader.readAsDataURL(file);
+
+      toast({
+        title: "Logo uploadé",
+        description: "Votre logo a été enregistré avec succès",
+      });
+
+      fetchProfile();
+    } catch (error) {
+      console.error('Error uploading logo:', error);
+      toast({
+        variant: "destructive",
+        title: "Erreur",
+        description: "Impossible d'uploader le logo",
+      });
+    } finally {
+      setIsUploadingLogo(false);
+    }
+  };
+
+  const handleRemoveLogo = async () => {
+    if (!profile || !profile.logo_path) return;
+
+    try {
+      // Supprimer du storage
+      await supabase.storage
+        .from('cv-uploads')
+        .remove([profile.logo_path]);
+
+      // Mettre à jour le profil
+      const { error } = await supabase
+        .from('commercial_profiles')
+        .update({ logo_path: null })
+        .eq('id', profile.id);
+
+      if (error) throw error;
+
+      setLogoPreview(null);
+      
+      toast({
+        title: "Logo supprimé",
+        description: "Le logo a été retiré de votre profil",
+      });
+
+      fetchProfile();
+    } catch (error) {
+      console.error('Error removing logo:', error);
+      toast({
+        variant: "destructive",
+        title: "Erreur",
+        description: "Impossible de supprimer le logo",
+      });
+    }
+  };
+
   if (isLoading) {
     return (
       <div className="flex items-center justify-center py-12">
@@ -123,7 +245,7 @@ export const CommercialProfile = () => {
       <div>
         <h2 className="text-2xl font-bold mb-2">Profil Commercial</h2>
         <p className="text-muted-foreground">
-          Ces coordonnées apparaîtront sur les CV générés
+          Ces coordonnées et votre logo apparaîtront sur les CV générés
         </p>
       </div>
 
@@ -139,6 +261,55 @@ export const CommercialProfile = () => {
                 Commercial SpeedCV
               </p>
             </div>
+          </div>
+
+          {/* Section Logo */}
+          <div className="space-y-4 pb-6 border-b">
+            <Label>Logo de la société</Label>
+            <p className="text-sm text-muted-foreground">
+              Ce logo apparaîtra sur tous les CV générés (PNG, JPG ou SVG, max 5 Mo)
+            </p>
+            
+            {logoPreview ? (
+              <div className="flex items-center gap-4">
+                <div className="w-32 h-32 border-2 border-dashed rounded-lg flex items-center justify-center bg-background">
+                  <img src={logoPreview} alt="Logo" className="max-w-full max-h-full object-contain p-2" />
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={handleRemoveLogo}
+                >
+                  <X className="w-4 h-4 mr-2" />
+                  Supprimer
+                </Button>
+              </div>
+            ) : (
+              <div className="flex items-center gap-4">
+                <label className="cursor-pointer">
+                  <input
+                    type="file"
+                    className="hidden"
+                    accept="image/png,image/jpeg,image/jpg,image/svg+xml"
+                    onChange={handleLogoUpload}
+                    disabled={isUploadingLogo}
+                  />
+                  <div className="w-32 h-32 border-2 border-dashed rounded-lg flex flex-col items-center justify-center hover:border-primary transition-colors bg-background">
+                    {isUploadingLogo ? (
+                      <Loader2 className="w-8 h-8 animate-spin text-primary" />
+                    ) : (
+                      <>
+                        <Upload className="w-8 h-8 text-muted-foreground mb-2" />
+                        <span className="text-xs text-muted-foreground text-center px-2">
+                          Cliquez pour uploader
+                        </span>
+                      </>
+                    )}
+                  </div>
+                </label>
+              </div>
+            )}
           </div>
 
           <div className="grid md:grid-cols-2 gap-4">
