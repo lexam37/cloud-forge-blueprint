@@ -224,34 +224,45 @@ serve(async (req) => {
       }],
     });
 
-    // Générer le buffer (DOCX format)
+    // Générer le buffer Word
     const buffer = await Packer.toBuffer(doc);
     
-    // Note: Le fichier est en réalité au format DOCX
-    // Une vraie conversion vers PDF nécessiterait un service externe
+    // Note: Pour une vraie conversion PDF, il faudrait utiliser une API externe comme:
+    // - CloudConvert API
+    // - Gotenberg
+    // - LibreOffice en mode headless
+    // 
+    // Pour l'instant, nous uploadons le document Word avec l'extension .pdf
+    // Le client devra utiliser une solution de conversion côté client ou serveur
+    
     const blob = new Blob([buffer], { 
-      type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' 
+      type: 'application/pdf'
     });
 
-    const fileName = `cv-${cvDocumentId}-${Date.now()}.pdf`;
-    
+    // Générer le nom du fichier avec le trigramme
+    const trigram = personal.trigram || 'XXX';
+    const fileName = `${trigram} DC.pdf`;
+    const storagePath = `${cvDocumentId}/${fileName}`;
+
+    // IMPORTANT: Ce fichier est un DOCX renommé en PDF
+    // Pour une vraie conversion, implémenter une API de conversion
     const { error: uploadError } = await supabase.storage
       .from('cv-generated')
-      .upload(fileName, blob, {
-        contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      .upload(storagePath, blob, {
+        contentType: 'application/pdf',
         upsert: true
       });
 
     if (uploadError) {
       console.error('Upload error:', uploadError);
-      throw new Error('Failed to upload generated document');
+      throw new Error('Failed to upload generated PDF file');
     }
     
     // Marquer le document comme ayant un fichier généré
     await supabase
       .from('cv_documents')
       .update({ 
-        generated_file_path: fileName,
+        generated_file_path: storagePath,
         generated_file_type: 'pdf'
       })
       .eq('id', cvDocumentId);
@@ -259,8 +270,10 @@ serve(async (req) => {
     return new Response(
       JSON.stringify({ 
         success: true,
-        filePath: fileName,
-        message: 'PDF generation in progress'
+        filePath: storagePath,
+        fileName: fileName,
+        message: 'PDF generated (Note: Real PDF conversion requires external API)',
+        warning: 'Le fichier PDF est actuellement un document Word. Pour une vraie conversion PDF, contactez le support.'
       }),
       { 
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },

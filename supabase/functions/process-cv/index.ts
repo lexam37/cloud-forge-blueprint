@@ -77,22 +77,25 @@ serve(async (req) => {
       const bytes = new Uint8Array(arrayBuffer);
       
       if (fileType === 'pdf') {
-        // Pour les PDFs, utiliser pdfjs-dist compatible Deno
-        const pdfjsLib = await import('https://esm.sh/pdfjs-dist@3.11.174/build/pdf.js');
+        // Pour les PDFs, utiliser pdf-parse compatible Deno
+        const pdfParse = await import('https://esm.sh/pdf-parse@1.1.1');
         
-        const loadingTask = pdfjsLib.getDocument({ data: bytes });
-        const pdf = await loadingTask.promise;
-        
-        const textParts = [];
-        for (let i = 1; i <= pdf.numPages; i++) {
-          const page = await pdf.getPage(i);
-          const textContent = await page.getTextContent();
-          const pageText = textContent.items.map((item: any) => item.str).join(' ');
-          textParts.push(pageText);
+        try {
+          const data = await pdfParse.default(bytes);
+          extractedText = data.text;
+          console.log('PDF text extracted, length:', extractedText.length);
+        } catch (pdfError) {
+          console.error('PDF parsing error:', pdfError);
+          // Fallback: essayer une extraction basique
+          const textDecoder = new TextDecoder('utf-8', { fatal: false });
+          const rawText = textDecoder.decode(bytes);
+          extractedText = rawText
+            .replace(/[^\x20-\x7E\n\r\t\u00C0-\u017F]/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim()
+            .substring(0, 50000);
+          console.log('PDF fallback extraction, length:', extractedText.length);
         }
-        
-        extractedText = textParts.join('\n\n');
-        console.log('PDF text extracted, length:', extractedText.length);
       } else if (fileType === 'docx' || fileType === 'doc') {
         // Pour les DOCX et DOC, utiliser mammoth
         const mammoth = await import('https://esm.sh/mammoth@1.6.0');

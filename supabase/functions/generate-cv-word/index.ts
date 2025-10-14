@@ -229,13 +229,15 @@ serve(async (req) => {
       type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' 
     });
 
-    // Générer le nom du fichier
-    const fileName = `cv-${cvDocumentId}-${Date.now()}.docx`;
+    // Générer le nom du fichier avec le trigramme
+    const trigram = personal.trigram || 'XXX';
+    const fileName = `${trigram} DC.docx`;
+    const storagePath = `${cvDocumentId}/${fileName}`;
 
     // Uploader dans le bucket cv-generated
     const { error: uploadError } = await supabase.storage
       .from('cv-generated')
-      .upload(fileName, blob, {
+      .upload(storagePath, blob, {
         contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
         upsert: true
       });
@@ -249,7 +251,7 @@ serve(async (req) => {
     await supabase
       .from('cv_documents')
       .update({ 
-        generated_file_path: fileName,
+        generated_file_path: storagePath,
         generated_file_type: 'docx'
       })
       .eq('id', cvDocumentId);
@@ -257,8 +259,9 @@ serve(async (req) => {
     return new Response(
       JSON.stringify({ 
         success: true,
-        filePath: fileName,
-        message: 'Word generation in progress'
+        filePath: storagePath,
+        fileName: fileName,
+        message: 'Word document generated successfully'
       }),
       { 
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },

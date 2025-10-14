@@ -92,11 +92,48 @@ export const CVHistoryList = () => {
     }
   };
 
+  const handleDownloadOriginal = async (cv: CVDocument) => {
+    try {
+      toast({
+        title: "Téléchargement en cours...",
+        description: "Fichier original",
+      });
+
+      // Télécharger le fichier original
+      const { data: fileData, error: downloadError } = await supabase.storage
+        .from('cv-uploads')
+        .download(cv.original_file_path);
+
+      if (downloadError) throw downloadError;
+
+      const url = URL.createObjectURL(fileData);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = cv.original_file_name;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      toast({
+        title: "✅ Téléchargement réussi",
+        description: "CV original téléchargé",
+      });
+    } catch (error) {
+      console.error('Error downloading original:', error);
+      toast({
+        variant: "destructive",
+        title: "Erreur",
+        description: "Impossible de télécharger le CV original",
+      });
+    }
+  };
+
   const handleDownloadPDF = async (cv: CVDocument) => {
     try {
       toast({
-        title: "Génération du PDF...",
-        description: "Veuillez patienter",
+        title: "Génération du dossier de compétences...",
+        description: "Format PDF",
       });
 
       // Appeler la fonction edge pour générer le PDF
@@ -116,7 +153,7 @@ export const CVHistoryList = () => {
       const url = URL.createObjectURL(fileData);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `CV_${cv.original_file_name.replace(/\.[^/.]+$/, '')}.pdf`;
+      a.download = data.fileName || 'DC.pdf';
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -124,14 +161,14 @@ export const CVHistoryList = () => {
 
       toast({
         title: "✅ Téléchargement réussi",
-        description: "Le CV a été téléchargé",
+        description: "Dossier de compétences téléchargé",
       });
     } catch (error) {
       console.error('Error downloading PDF:', error);
       toast({
         variant: "destructive",
         title: "Erreur",
-        description: "Impossible de télécharger le CV",
+        description: "Impossible de télécharger le dossier de compétences",
       });
     }
   };
@@ -139,8 +176,8 @@ export const CVHistoryList = () => {
   const handleDownloadWord = async (cv: CVDocument) => {
     try {
       toast({
-        title: "Génération du Word...",
-        description: "Veuillez patienter",
+        title: "Génération du dossier de compétences...",
+        description: "Format Word",
       });
 
       // Appeler la fonction edge pour générer le Word
@@ -160,7 +197,7 @@ export const CVHistoryList = () => {
       const url = URL.createObjectURL(fileData);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `CV_${cv.original_file_name.replace(/\.[^/.]+$/, '')}.docx`;
+      a.download = data.fileName || 'DC.docx';
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -168,14 +205,14 @@ export const CVHistoryList = () => {
 
       toast({
         title: "✅ Téléchargement réussi",
-        description: "Le CV a été téléchargé",
+        description: "Dossier de compétences téléchargé",
       });
     } catch (error) {
       console.error('Error downloading Word:', error);
       toast({
         variant: "destructive",
         title: "Erreur",
-        description: "Impossible de télécharger le CV",
+        description: "Impossible de télécharger le dossier de compétences",
       });
     }
   };
@@ -303,12 +340,23 @@ export const CVHistoryList = () => {
               </div>
 
               <div className="flex gap-2 flex-shrink-0">
+                {/* Télécharger le CV original */}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => handleDownloadOriginal(cv)}
+                >
+                  <Download className="w-4 h-4 mr-2" />
+                  Original
+                </Button>
+
+                {/* Télécharger le dossier de compétences généré */}
                 {cv.status === 'processed' && (
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
-                      <Button variant="outline" size="sm">
+                      <Button variant="default" size="sm">
                         <FileDown className="w-4 h-4 mr-2" />
-                        Télécharger
+                        Dossier de compétences
                       </Button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end">
