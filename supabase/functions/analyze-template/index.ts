@@ -51,9 +51,17 @@ serve(async (req) => {
 
     console.log('✅ File downloaded successfully, size:', fileData.size, 'bytes');
 
-    // Convertir le fichier en base64 pour l'envoyer à l'IA
+    // Convertir le fichier en base64 pour l'envoyer à l'IA (méthode compatible avec les gros fichiers)
     const arrayBuffer = await fileData.arrayBuffer();
-    const base64 = btoa(String.fromCharCode(...new Uint8Array(arrayBuffer)));
+    const bytes = new Uint8Array(arrayBuffer);
+    let binary = '';
+    const chunkSize = 8192; // Traiter par chunks pour éviter le stack overflow
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+      const chunk = bytes.slice(i, i + chunkSize);
+      binary += String.fromCharCode.apply(null, Array.from(chunk));
+    }
+    const base64 = btoa(binary);
+    
     const mimeType = template.file_type === 'pdf' ? 'application/pdf' : 
                      template.file_type === 'docx' || template.file_type === 'doc' ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' :
                      'application/vnd.openxmlformats-officedocument.presentationml.presentation';

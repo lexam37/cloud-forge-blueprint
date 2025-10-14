@@ -67,6 +67,21 @@ serve(async (req) => {
 
     console.log('CV file downloaded, extracting data with AI...');
 
+    // Convertir le fichier en base64 pour l'envoyer à l'IA
+    const arrayBuffer = await cvFileData.arrayBuffer();
+    const bytes = new Uint8Array(arrayBuffer);
+    let binary = '';
+    const chunkSize = 8192;
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+      const chunk = bytes.slice(i, i + chunkSize);
+      binary += String.fromCharCode.apply(null, Array.from(chunk));
+    }
+    const base64 = btoa(binary);
+    
+    const mimeType = cvDoc.original_file_type === 'pdf' ? 'application/pdf' : 
+                     cvDoc.original_file_type === 'docx' || cvDoc.original_file_type === 'doc' ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' :
+                     'application/vnd.openxmlformats-officedocument.presentationml.presentation';
+
     // Appeler l'IA pour extraire les données du CV
     const aiResponse = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
       method: 'POST',
@@ -93,7 +108,10 @@ Retourne un JSON structuré avec tous ces éléments.`
           },
           {
             role: 'user',
-            content: 'Analyse ce CV et extrais toutes les données pertinentes.'
+            content: [
+              { type: 'text', text: 'Analyse ce CV et extrais toutes les données pertinentes.' },
+              { type: 'image_url', image_url: { url: `data:${mimeType};base64,${base64}` } }
+            ]
           }
         ],
         tools: [
