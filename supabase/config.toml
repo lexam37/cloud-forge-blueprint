@@ -1,1 +1,7 @@
 project_id = "mlpctpnqkqqzvwosrbeq"
+
+[functions.analyze-template]
+verify_jwt = false
+
+[functions.process-cv]
+verify_jwt = false

@@ -1,11 +1,13 @@
 import { Upload } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { useNavigate } from "react-router-dom";
 import uploadIcon from "@/assets/upload-icon.png";
 import { useState } from "react";
 
 const UploadZone = () => {
   const [isDragging, setIsDragging] = useState(false);
+  const navigate = useNavigate();
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
@@ -70,7 +72,7 @@ const UploadZone = () => {
                 <div className="h-px flex-1 bg-border" />
               </div>
 
-              <Button variant="hero" size="lg" className="group">
+              <Button variant="hero" size="lg" className="group" onClick={() => navigate('/dashboard')}>
                 <Upload className="w-5 h-5 mr-2 group-hover:scale-110 transition-transform" />
                 Sélectionner un fichier
               </Button>
