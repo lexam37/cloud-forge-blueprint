@@ -85,26 +85,30 @@ serve(async (req) => {
 
     console.log('CV converted to base64, extracting data with AI...');
 
-    // Extraction avec l'IA
-    const systemPrompt = `Tu es un expert en extraction de données de CV. Analyse ce CV et extrais TOUTES les informations de manière structurée.
+    // Extraction avec l'IA - ANONYMISATION COMPLÈTE
+    const systemPrompt = `Tu es un expert en extraction et anonymisation de CV. Analyse ce CV et extrais TOUTES les informations en les ANONYMISANT.
 
-IMPORTANT : 
-1. Extrais les informations personnelles (nom, prénom, titre, années d'expérience)
-2. Pour l'ANONYMISATION, génère des initiales : première lettre du prénom suivie d'un point, première lettre du nom suivie d'un point
-3. Extrais TOUS les projets clés avec titre, rôle et description détaillée
-4. Extrais TOUTES les compétences : techniques, outils, langues, certifications
-5. Extrais TOUTE la formation : diplômes, institutions, années, domaines
-6. Extrais TOUTES les missions : client, dates, rôle, contexte, réalisations, environnement technique
+ÉTAPES D'ANONYMISATION CRITIQUES :
+1. Créer un TRIGRAMME : première lettre du prénom + première lettre du nom + dernière lettre du nom (tout en MAJUSCULE)
+   Exemple : Jean DUPONT → JDT, Marie MARTIN → MMN
+2. SUPPRIMER toutes informations personnelles : nom complet, prénom, email, téléphone, adresse personnelle
+3. SUPPRIMER photos de portrait, QR codes personnels
+4. SUPPRIMER tous liens personnels : réseaux sociaux (LinkedIn, Twitter, etc.), site web personnel, GitHub personnel, portfolio personnel
+5. Extraire TOUS les projets, compétences, formations et missions professionnelles
 
 Retourne un JSON avec cette structure EXACTE :
 {
   "personal": {
-    "first_name": "prénom extrait",
-    "last_name": "nom extrait",
-    "anonymized_first": "première lettre du prénom + point (ex: J.)",
-    "anonymized_last": "première lettre du nom + point (ex: D.)",
+    "first_name": "prénom extrait (à ne pas inclure dans le CV final)",
+    "last_name": "nom extrait (à ne pas inclure dans le CV final)",
+    "trigram": "TRIGRAMME (ex: JDT pour Jean DUPONT)",
     "title": "titre professionnel",
-    "years_experience": nombre_années
+    "years_experience": nombre_années,
+    "email_found": "email extrait (à ne pas inclure)",
+    "phone_found": "téléphone extrait (à ne pas inclure)",
+    "address_found": "adresse extraite (à ne pas inclure)",
+    "linkedin_found": "lien LinkedIn extrait (à ne pas inclure)",
+    "personal_links_found": ["liens personnels extraits (à ne pas inclure)"]
   },
   "key_projects": [
     {
@@ -116,7 +120,7 @@ Retourne un JSON avec cette structure EXACTE :
   "skills": {
     "technical": ["compétence1", "compétence2"],
     "tools": ["outil1", "outil2"],
-    "languages": ["langue1", "langue2"],
+    "languages": ["langue1: niveau", "langue2: niveau"],
     "certifications": ["cert1", "cert2"]
   },
   "education": [

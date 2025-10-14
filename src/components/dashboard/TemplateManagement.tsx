@@ -3,7 +3,7 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { FileText, Upload, Loader2, Sparkles, CheckCircle2 } from "lucide-react";
+import { FileText, Upload, Loader2, Sparkles, CheckCircle2, Trash2 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 
@@ -23,6 +23,7 @@ export const TemplateManagement = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [isUploading, setIsUploading] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const { toast } = useToast();
 
   useEffect(() => {
@@ -160,6 +161,45 @@ export const TemplateManagement = () => {
     }
   };
 
+  const handleDeleteTemplate = async (templateId: string, filePath: string) => {
+    if (!confirm("Êtes-vous sûr de vouloir supprimer ce template ?")) return;
+
+    setDeletingId(templateId);
+
+    try {
+      // Supprimer du storage
+      const { error: storageError } = await supabase.storage
+        .from('cv-templates')
+        .remove([filePath]);
+
+      if (storageError) throw storageError;
+
+      // Supprimer de la base de données
+      const { error: dbError } = await supabase
+        .from('cv_templates')
+        .delete()
+        .eq('id', templateId);
+
+      if (dbError) throw dbError;
+
+      toast({
+        title: "Template supprimé",
+        description: "Le template a été supprimé avec succès",
+      });
+
+      fetchTemplates();
+    } catch (error) {
+      console.error('Error deleting template:', error);
+      toast({
+        variant: "destructive",
+        title: "Erreur",
+        description: "Impossible de supprimer le template",
+      });
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
   if (isLoading) {
     return (
       <div className="flex items-center justify-center py-12">
@@ -213,21 +253,35 @@ export const TemplateManagement = () => {
           {templates.map((template) => (
             <Card key={template.id} className="p-6">
               <div className="flex items-start justify-between mb-4">
-                <div className="flex items-start gap-3">
+                <div className="flex items-start gap-3 flex-1">
                   <div className="w-10 h-10 rounded-lg bg-gradient-hero flex items-center justify-center flex-shrink-0">
                     <FileText className="w-5 h-5 text-primary-foreground" />
                   </div>
-                  <div>
-                    <h3 className="font-semibold mb-1">{template.name}</h3>
+                  <div className="flex-1 min-w-0">
+                    <h3 className="font-semibold mb-1 truncate">{template.name}</h3>
                     <Badge variant={template.is_active ? "default" : "secondary"}>
                       {template.is_active ? "Actif" : "Inactif"}
                     </Badge>
                   </div>
                 </div>
 
-                {template.structure_data && (
-                  <CheckCircle2 className="w-5 h-5 text-accent" />
-                )}
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  {template.structure_data && (
+                    <CheckCircle2 className="w-5 h-5 text-accent" />
+                  )}
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => handleDeleteTemplate(template.id, template.file_path)}
+                    disabled={deletingId === template.id}
+                  >
+                    {deletingId === template.id ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <Trash2 className="w-4 h-4 text-destructive" />
+                    )}
+                  </Button>
+                </div>
               </div>
 
               {template.structure_data ? (

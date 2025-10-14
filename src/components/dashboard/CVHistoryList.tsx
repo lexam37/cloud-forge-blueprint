@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { FileText, Download, Clock, CheckCircle2, AlertCircle, Loader2, FileDown } from "lucide-react";
+import { FileText, Download, Clock, CheckCircle2, AlertCircle, Loader2, FileDown, Trash2 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { formatDistanceToNow } from "date-fns";
@@ -20,6 +20,7 @@ type CVDocument = Database['public']['Tables']['cv_documents']['Row'];
 export const CVHistoryList = () => {
   const [cvDocuments, setCvDocuments] = useState<CVDocument[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const { toast } = useToast();
 
   useEffect(() => {
@@ -179,6 +180,52 @@ export const CVHistoryList = () => {
     }
   };
 
+  const handleDeleteCV = async (cv: CVDocument) => {
+    if (!confirm("Êtes-vous sûr de vouloir supprimer ce CV ?")) return;
+
+    setDeletingId(cv.id);
+
+    try {
+      // Supprimer le fichier original du storage
+      const { error: storageError } = await supabase.storage
+        .from('cv-uploads')
+        .remove([cv.original_file_path]);
+
+      if (storageError) console.error('Storage error:', storageError);
+
+      // Supprimer le fichier généré s'il existe
+      if (cv.generated_file_path) {
+        await supabase.storage
+          .from('cv-generated')
+          .remove([cv.generated_file_path]);
+      }
+
+      // Supprimer de la base de données
+      const { error: dbError } = await supabase
+        .from('cv_documents')
+        .delete()
+        .eq('id', cv.id);
+
+      if (dbError) throw dbError;
+
+      toast({
+        title: "CV supprimé",
+        description: "Le CV a été supprimé avec succès",
+      });
+
+      fetchCVDocuments();
+    } catch (error) {
+      console.error('Error deleting CV:', error);
+      toast({
+        variant: "destructive",
+        title: "Erreur",
+        description: "Impossible de supprimer le CV",
+      });
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
   if (isLoading) {
     return (
       <div className="flex items-center justify-center py-12">
@@ -276,6 +323,19 @@ export const CVHistoryList = () => {
                     </DropdownMenuContent>
                   </DropdownMenu>
                 )}
+                
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => handleDeleteCV(cv)}
+                  disabled={deletingId === cv.id}
+                >
+                  {deletingId === cv.id ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Trash2 className="w-4 h-4 text-destructive" />
+                  )}
+                </Button>
               </div>
             </div>
           </Card>

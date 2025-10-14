@@ -59,7 +59,7 @@ export const CommercialProfile = () => {
         // Charger l'aperçu du logo si disponible
         if (data.logo_path) {
           const { data: urlData } = supabase.storage
-            .from('cv-uploads')
+            .from('company-logos')
             .getPublicUrl(data.logo_path);
           setLogoPreview(urlData.publicUrl);
         }
@@ -155,9 +155,9 @@ export const CommercialProfile = () => {
       const fileName = `logo-${timestamp}-${randomString}.${fileExt}`;
       const filePath = fileName;
 
-      // Upload vers Supabase Storage
+      // Upload vers Supabase Storage (bucket company-logos)
       const { error: uploadError } = await supabase.storage
-        .from('cv-uploads')
+        .from('company-logos')
         .upload(filePath, file);
 
       if (uploadError) throw uploadError;
@@ -203,7 +203,7 @@ export const CommercialProfile = () => {
     try {
       // Supprimer du storage
       await supabase.storage
-        .from('cv-uploads')
+        .from('company-logos')
         .remove([profile.logo_path]);
 
       // Mettre à jour le profil
