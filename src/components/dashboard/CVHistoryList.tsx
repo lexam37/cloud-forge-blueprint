@@ -13,19 +13,9 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import type { Database } from "@/integrations/supabase/types";
 
-interface CVDocument {
-  id: string;
-  original_file_name: string;
-  original_file_path: string;
-  original_file_type: string;
-  status: string;
-  extracted_data: any;
-  processing_time_ms: number | null;
-  error_message: string | null;
-  generated_file_path: string | null;
-  created_at: string;
-}
+type CVDocument = Database['public']['Tables']['cv_documents']['Row'];
 
 export const CVHistoryList = () => {
   const [cvDocuments, setCvDocuments] = useState<CVDocument[]>([]);
@@ -216,22 +206,22 @@ export const CVHistoryList = () => {
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-2">
                     <h3 className="font-semibold truncate">{cv.original_file_name}</h3>
-                    <Badge variant={getStatusVariant(cv.status)} className="flex items-center gap-1">
-                      {getStatusIcon(cv.status)}
-                      <span>{getStatusLabel(cv.status)}</span>
+                    <Badge variant={getStatusVariant(cv.status || 'uploaded')} className="flex items-center gap-1">
+                      {getStatusIcon(cv.status || 'uploaded')}
+                      <span>{getStatusLabel(cv.status || 'uploaded')}</span>
                     </Badge>
                   </div>
 
-                  {cv.extracted_data && (
+                  {cv.extracted_data && typeof cv.extracted_data === 'object' && (
                     <div className="text-sm text-muted-foreground space-y-1 mb-2">
                       <p>
-                        <strong>Candidat:</strong> {cv.extracted_data.personal?.anonymized_first}. {cv.extracted_data.personal?.anonymized_last}.
+                        <strong>Candidat:</strong> {(cv.extracted_data as any).personal?.anonymized_first}. {(cv.extracted_data as any).personal?.anonymized_last}.
                       </p>
                       <p>
-                        <strong>Poste:</strong> {cv.extracted_data.personal?.title}
+                        <strong>Poste:</strong> {(cv.extracted_data as any).personal?.title}
                       </p>
                       <p>
-                        <strong>Expérience:</strong> {cv.extracted_data.personal?.years_experience} ans
+                        <strong>Expérience:</strong> {(cv.extracted_data as any).personal?.years_experience} ans
                       </p>
                     </div>
                   )}
