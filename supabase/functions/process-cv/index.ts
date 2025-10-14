@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { readableStreamFromReader } from "https://deno.land/std@0.168.0/streams/conversion.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -65,25 +66,46 @@ serve(async (req) => {
       throw new Error('Failed to download CV file');
     }
 
-    console.log('CV file downloaded, extracting data with AI...');
+    console.log('CV file downloaded, extracting text...');
 
-    // Convertir le PDF en base64 pour l'envoyer à l'IA
-    console.log('Converting CV to base64...');
-    const arrayBuffer = await cvFileData.arrayBuffer();
-    const bytes = new Uint8Array(arrayBuffer);
-    
-    // Conversion en base64 par chunks pour éviter les problèmes de mémoire
-    let base64 = '';
-    const chunkSize = 1024 * 1024; // 1MB chunks
-    for (let i = 0; i < bytes.length; i += chunkSize) {
-      const chunk = bytes.slice(i, i + chunkSize);
-      const binaryString = Array.from(chunk)
-        .map(byte => String.fromCharCode(byte))
-        .join('');
-      base64 += btoa(binaryString);
+    // Extraire le texte du fichier selon son type
+    let extractedText = '';
+    const fileType = cvDoc.original_file_type;
+
+    try {
+      const arrayBuffer = await cvFileData.arrayBuffer();
+      const bytes = new Uint8Array(arrayBuffer);
+      
+      if (fileType === 'pdf') {
+        // Pour les PDFs, utiliser pdf-parse
+        const pdfParse = await import('https://esm.sh/pdf-parse@1.1.1');
+        const pdfData = await pdfParse.default(bytes);
+        extractedText = pdfData.text;
+        console.log('PDF text extracted, length:', extractedText.length);
+      } else if (fileType === 'docx') {
+        // Pour les DOCX, utiliser mammoth
+        const mammoth = await import('https://esm.sh/mammoth@1.6.0');
+        const result = await mammoth.extractRawText({ arrayBuffer });
+        extractedText = result.value;
+        console.log('DOCX text extracted, length:', extractedText.length);
+      } else if (fileType === 'pptx') {
+        // Pour les PPTX, essayer d'extraire le texte basique
+        const textDecoder = new TextDecoder('utf-8', { fatal: false });
+        extractedText = textDecoder.decode(bytes);
+        console.log('PPTX text extracted (raw), length:', extractedText.length);
+      } else {
+        throw new Error(`Unsupported file type: ${fileType}`);
+      }
+
+      if (!extractedText || extractedText.trim().length === 0) {
+        throw new Error('No text could be extracted from the file');
+      }
+    } catch (extractError) {
+      console.error('Error extracting text:', extractError);
+      throw new Error(`Failed to extract text from ${fileType} file: ${extractError instanceof Error ? extractError.message : 'Unknown error'}`);
     }
 
-    console.log('CV converted to base64, extracting data with AI...');
+    console.log('Text extracted, analyzing with AI...');
 
     // Extraction avec l'IA - ANONYMISATION COMPLÈTE
     const systemPrompt = `Tu es un expert en extraction et anonymisation de CV. Analyse ce CV et extrais TOUTES les informations en les ANONYMISANT.
@@ -151,19 +173,15 @@ Retourne un JSON avec cette structure EXACTE :
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'google/gemini-2.5-pro',
+        model: 'google/gemini-2.5-flash',
         messages: [
           {
+            role: 'system',
+            content: systemPrompt
+          },
+          {
             role: 'user',
-            content: [
-              { type: 'text', text: systemPrompt },
-              {
-                type: 'image_url',
-                image_url: {
-                  url: `data:application/pdf;base64,${base64}`
-                }
-              }
-            ]
+            content: `Voici le texte extrait du CV à analyser et anonymiser :\n\n${extractedText}`
           }
         ],
         temperature: 0.1,
