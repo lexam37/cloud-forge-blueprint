@@ -94,15 +94,21 @@ export const CVHistoryList = () => {
   const handleDownloadPDF = async (cv: CVDocument) => {
     try {
       toast({
-        title: "Préparation du téléchargement...",
-        description: "Récupération du CV traité",
+        title: "Génération du PDF...",
+        description: "Veuillez patienter",
       });
 
-      // Pour l'instant, télécharger le fichier original
-      // TODO: Implémenter la vraie génération PDF avec le template
+      // Appeler la fonction edge pour générer le PDF
+      const { data, error: functionError } = await supabase.functions.invoke('generate-cv-pdf', {
+        body: { cvDocumentId: cv.id }
+      });
+
+      if (functionError) throw functionError;
+
+      // Télécharger le fichier généré
       const { data: fileData, error: downloadError } = await supabase.storage
-        .from('cv-uploads')
-        .download(cv.original_file_path);
+        .from('cv-generated')
+        .download(data.filePath);
 
       if (downloadError) throw downloadError;
 
@@ -132,15 +138,21 @@ export const CVHistoryList = () => {
   const handleDownloadWord = async (cv: CVDocument) => {
     try {
       toast({
-        title: "Préparation du téléchargement...",
-        description: "Récupération du CV traité",
+        title: "Génération du Word...",
+        description: "Veuillez patienter",
       });
 
-      // Pour l'instant, télécharger le fichier original
-      // TODO: Implémenter la vraie génération Word avec le template
+      // Appeler la fonction edge pour générer le Word
+      const { data, error: functionError } = await supabase.functions.invoke('generate-cv-word', {
+        body: { cvDocumentId: cv.id }
+      });
+
+      if (functionError) throw functionError;
+
+      // Télécharger le fichier généré
       const { data: fileData, error: downloadError } = await supabase.storage
-        .from('cv-uploads')
-        .download(cv.original_file_path);
+        .from('cv-generated')
+        .download(data.filePath);
 
       if (downloadError) throw downloadError;
 

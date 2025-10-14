@@ -54,10 +54,29 @@ serve(async (req) => {
     console.log('Commercial:', commercial);
     console.log('Template:', template);
 
-    // TODO: Implémenter la génération Word avec un service de conversion
-    // Pour l'instant, on simule en copiant simplement le fichier original
-    
+    // Récupérer le fichier CV original
+    const { data: originalFile, error: downloadError } = await supabase.storage
+      .from('cv-uploads')
+      .download(cvDoc.original_file_path);
+
+    if (downloadError) {
+      throw new Error('Failed to download original CV file');
+    }
+
+    // Pour l'instant, copier le fichier original dans le bucket generated
+    // TODO: Implémenter la vraie génération avec le template
     const fileName = `cv-${cvDocumentId}-${Date.now()}.docx`;
+    
+    const { error: uploadError } = await supabase.storage
+      .from('cv-generated')
+      .upload(fileName, originalFile, {
+        contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        upsert: true
+      });
+
+    if (uploadError) {
+      throw new Error('Failed to upload generated Word file');
+    }
     
     // Marquer le document comme ayant un fichier généré
     await supabase
