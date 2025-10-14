@@ -333,7 +333,7 @@ export const CVHistoryList = () => {
                       {formatDistanceToNow(new Date(cv.created_at), { addSuffix: true, locale: fr })}
                     </span>
                     {cv.processing_time_ms && (
-                      <span>Traité en {cv.processing_time_ms}ms</span>
+                      <span>Traité en {Math.round(cv.processing_time_ms / 1000)}s</span>
                     )}
                   </div>
                 </div>
