@@ -14,7 +14,133 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      cv_documents: {
+        Row: {
+          created_at: string | null
+          error_message: string | null
+          extracted_data: Json | null
+          generated_file_path: string | null
+          generated_file_type: Database["public"]["Enums"]["file_type"] | null
+          id: string
+          original_file_name: string
+          original_file_path: string
+          original_file_type: Database["public"]["Enums"]["file_type"]
+          processing_time_ms: number | null
+          status: Database["public"]["Enums"]["cv_status"] | null
+          template_id: string | null
+          updated_at: string | null
+        }
+        Insert: {
+          created_at?: string | null
+          error_message?: string | null
+          extracted_data?: Json | null
+          generated_file_path?: string | null
+          generated_file_type?: Database["public"]["Enums"]["file_type"] | null
+          id?: string
+          original_file_name: string
+          original_file_path: string
+          original_file_type: Database["public"]["Enums"]["file_type"]
+          processing_time_ms?: number | null
+          status?: Database["public"]["Enums"]["cv_status"] | null
+          template_id?: string | null
+          updated_at?: string | null
+        }
+        Update: {
+          created_at?: string | null
+          error_message?: string | null
+          extracted_data?: Json | null
+          generated_file_path?: string | null
+          generated_file_type?: Database["public"]["Enums"]["file_type"] | null
+          id?: string
+          original_file_name?: string
+          original_file_path?: string
+          original_file_type?: Database["public"]["Enums"]["file_type"]
+          processing_time_ms?: number | null
+          status?: Database["public"]["Enums"]["cv_status"] | null
+          template_id?: string | null
+          updated_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "cv_documents_template_id_fkey"
+            columns: ["template_id"]
+            isOneToOne: false
+            referencedRelation: "cv_templates"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      cv_templates: {
+        Row: {
+          created_at: string | null
+          description: string | null
+          file_path: string
+          file_type: Database["public"]["Enums"]["file_type"]
+          id: string
+          is_active: boolean | null
+          name: string
+          structure_data: Json | null
+          updated_at: string | null
+        }
+        Insert: {
+          created_at?: string | null
+          description?: string | null
+          file_path: string
+          file_type: Database["public"]["Enums"]["file_type"]
+          id?: string
+          is_active?: boolean | null
+          name: string
+          structure_data?: Json | null
+          updated_at?: string | null
+        }
+        Update: {
+          created_at?: string | null
+          description?: string | null
+          file_path?: string
+          file_type?: Database["public"]["Enums"]["file_type"]
+          id?: string
+          is_active?: boolean | null
+          name?: string
+          structure_data?: Json | null
+          updated_at?: string | null
+        }
+        Relationships: []
+      }
+      processing_logs: {
+        Row: {
+          created_at: string | null
+          cv_document_id: string | null
+          details: Json | null
+          id: string
+          message: string | null
+          step: string
+        }
+        Insert: {
+          created_at?: string | null
+          cv_document_id?: string | null
+          details?: Json | null
+          id?: string
+          message?: string | null
+          step: string
+        }
+        Update: {
+          created_at?: string | null
+          cv_document_id?: string | null
+          details?: Json | null
+          id?: string
+          message?: string | null
+          step?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "processing_logs_cv_document_id_fkey"
+            columns: ["cv_document_id"]
+            isOneToOne: false
+            referencedRelation: "cv_documents"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Views: {
       [_ in never]: never
@@ -23,7 +149,8 @@ export type Database = {
       [_ in never]: never
     }
     Enums: {
-      [_ in never]: never
+      cv_status: "uploaded" | "analyzing" | "processed" | "error"
+      file_type: "pdf" | "docx" | "pptx"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -150,6 +277,9 @@ export type CompositeTypes<
 
 export const Constants = {
   public: {
-    Enums: {},
+    Enums: {
+      cv_status: ["uploaded", "analyzing", "processed", "error"],
+      file_type: ["pdf", "docx", "pptx"],
+    },
   },
 } as const
