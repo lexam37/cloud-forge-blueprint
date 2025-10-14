@@ -16,6 +16,7 @@ interface CVDocument {
   extracted_data: any;
   processing_time_ms: number | null;
   error_message: string | null;
+  generated_file_path: string | null;
   created_at: string;
 }
 
@@ -90,6 +91,40 @@ export const CVHistoryList = () => {
         return 'secondary';
       default:
         return 'outline';
+    }
+  };
+
+  const handleDownload = async (cv: CVDocument) => {
+    if (!cv.generated_file_path) return;
+
+    try {
+      const { data, error } = await supabase.storage
+        .from('cv-generated')
+        .download(cv.generated_file_path);
+
+      if (error) throw error;
+
+      // Créer un lien de téléchargement
+      const url = URL.createObjectURL(data);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `CV_${cv.original_file_name}`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      toast({
+        title: "Téléchargement réussi",
+        description: "Le CV a été téléchargé avec succès",
+      });
+    } catch (error) {
+      console.error('Error downloading CV:', error);
+      toast({
+        variant: "destructive",
+        title: "Erreur",
+        description: "Impossible de télécharger le CV",
+      });
     }
   };
 
@@ -170,8 +205,8 @@ export const CVHistoryList = () => {
               </div>
 
               <div className="flex gap-2 flex-shrink-0">
-                {cv.status === 'processed' && (
-                  <Button variant="outline" size="sm">
+                {cv.status === 'processed' && cv.generated_file_path && (
+                  <Button variant="outline" size="sm" onClick={() => handleDownload(cv)}>
                     <Download className="w-4 h-4 mr-2" />
                     Télécharger
                   </Button>
