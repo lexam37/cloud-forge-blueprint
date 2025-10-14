@@ -17,6 +17,7 @@ import {
 interface CVDocument {
   id: string;
   original_file_name: string;
+  original_file_path: string;
   original_file_type: string;
   status: string;
   extracted_data: any;
