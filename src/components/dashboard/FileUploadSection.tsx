@@ -33,12 +33,14 @@ export const FileUploadSection = ({ onUploadSuccess }: FileUploadSectionProps) =
       // Vérifier le type de fichier
       const allowedTypes = [
         'application/pdf',
-        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-        'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+        'application/msword', // .doc
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document', // .docx
+        'application/vnd.ms-powerpoint', // .ppt
+        'application/vnd.openxmlformats-officedocument.presentationml.presentation' // .pptx
       ];
 
       if (!allowedTypes.includes(file.type)) {
-        throw new Error('Format de fichier non supporté. Utilisez PDF, DOCX ou PPTX.');
+        throw new Error('Format non supporté. Utilisez .pdf, .doc, .docx, .ppt ou .pptx');
       }
 
       // Vérifier la taille (10 MB max)
@@ -67,8 +69,10 @@ export const FileUploadSection = ({ onUploadSuccess }: FileUploadSectionProps) =
       }
 
       // Déterminer le type de fichier
-      let fileType: 'pdf' | 'docx' | 'pptx' = 'pdf';
+      let fileType: 'pdf' | 'docx' | 'pptx' | 'doc' | 'ppt' = 'pdf';
+      if (file.type === 'application/msword') fileType = 'doc';
       if (file.type.includes('wordprocessingml')) fileType = 'docx';
+      if (file.type === 'application/vnd.ms-powerpoint') fileType = 'ppt';
       if (file.type.includes('presentationml')) fileType = 'pptx';
 
       // Créer l'enregistrement dans la base de données
@@ -177,7 +181,7 @@ export const FileUploadSection = ({ onUploadSuccess }: FileUploadSectionProps) =
             </h3>
             
             <p className="text-muted-foreground mb-6 max-w-md">
-              Formats acceptés : PDF, Word (.docx), PowerPoint (.pptx)
+              Formats acceptés : PDF, Word (.doc, .docx), PowerPoint (.ppt, .pptx)
               <br />
               Taille maximale : 10 MB
             </p>
@@ -199,7 +203,7 @@ export const FileUploadSection = ({ onUploadSuccess }: FileUploadSectionProps) =
                 id="file-input"
                 type="file"
                 className="hidden"
-                accept=".pdf,.docx,.pptx"
+                accept=".pdf,.doc,.docx,.ppt,.pptx"
                 onChange={handleFileInput}
                 disabled={isProcessing}
               />

@@ -39,37 +39,39 @@ serve(async (req) => {
 
     console.log('✅ Template found:', template.name, 'Type:', template.file_type);
 
-    // Télécharger le fichier template
-    const { data: fileData, error: downloadError } = await supabase.storage
-      .from('cv-templates')
-      .download(template.file_path);
-
-    if (downloadError) {
-      console.error('Download error:', downloadError);
-      throw new Error('Failed to download template file');
-    }
-
-    console.log('✅ File downloaded successfully, size:', fileData.size, 'bytes');
-
-    // Convertir le fichier en base64 pour l'envoyer à l'IA (méthode compatible avec les gros fichiers)
-    const arrayBuffer = await fileData.arrayBuffer();
-    const bytes = new Uint8Array(arrayBuffer);
-    let binary = '';
-    const chunkSize = 8192; // Traiter par chunks pour éviter le stack overflow
-    for (let i = 0; i < bytes.length; i += chunkSize) {
-      const chunk = bytes.slice(i, i + chunkSize);
-      binary += String.fromCharCode.apply(null, Array.from(chunk));
-    }
-    const base64 = btoa(binary);
+    // Vérifier si le type de fichier est supporté pour l'analyse IA
+    let structureData;
     
-    const mimeType = template.file_type === 'pdf' ? 'application/pdf' : 
-                     template.file_type === 'docx' || template.file_type === 'doc' ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' :
-                     'application/vnd.openxmlformats-officedocument.presentationml.presentation';
+    if (template.file_type === 'pdf') {
+      console.log('📄 PDF detected - will use AI analysis');
+      
+      // Télécharger le fichier template
+      const { data: fileData, error: downloadError } = await supabase.storage
+        .from('cv-templates')
+        .download(template.file_path);
 
-    console.log('🤖 Sending to AI for analysis...');
+      if (downloadError) {
+        console.error('Download error:', downloadError);
+        throw new Error('Failed to download template file');
+      }
 
-    // Prompt détaillé pour une analyse visuelle complète
-    const prompt = `Analyse ce CV template de manière extrêmement détaillée. 
+      console.log('✅ File downloaded successfully, size:', fileData.size, 'bytes');
+
+      // Convertir le fichier en base64 pour l'envoyer à l'IA
+      const arrayBuffer = await fileData.arrayBuffer();
+      const bytes = new Uint8Array(arrayBuffer);
+      let binary = '';
+      const chunkSize = 8192;
+      for (let i = 0; i < bytes.length; i += chunkSize) {
+        const chunk = bytes.slice(i, i + chunkSize);
+        binary += String.fromCharCode.apply(null, Array.from(chunk));
+      }
+      const base64 = btoa(binary);
+
+      console.log('🤖 Sending PDF to AI for analysis...');
+
+      // Prompt détaillé pour une analyse visuelle complète
+      const prompt = `Analyse ce CV template PDF de manière extrêmement détaillée.
 
 Je veux que tu identifies et extraies TOUS les éléments visuels et structurels :
 
@@ -119,30 +121,30 @@ Je veux que tu identifies et extraies TOUS les éléments visuels et structurels
 
 Sois EXTRÊMEMENT PRÉCIS sur chaque détail visuel pour que je puisse reproduire ce template à l'identique.`;
 
-    const response = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${lovableApiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'google/gemini-2.5-pro', // Utiliser le modèle le plus puissant pour l'analyse visuelle
-        messages: [
-          { 
-            role: 'system', 
-            content: 'Tu es un expert en design graphique et analyse de documents. Tu dois extraire chaque détail visuel avec une précision millimétrique.' 
-          },
-          { 
-            role: 'user', 
-            content: [
-              { type: 'text', text: prompt },
-              { 
-                type: 'image_url', 
-                image_url: { url: `data:${mimeType};base64,${base64}` }
-              }
-            ]
-          }
-        ],
+      const response = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${lovableApiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: 'google/gemini-2.5-pro',
+          messages: [
+            { 
+              role: 'system', 
+              content: 'Tu es un expert en design graphique et analyse de documents PDF. Tu dois extraire chaque détail visuel avec une précision millimétrique.' 
+            },
+            { 
+              role: 'user', 
+              content: [
+                { type: 'text', text: prompt },
+                { 
+                  type: 'image_url', 
+                  image_url: { url: `data:application/pdf;base64,${base64}` }
+                }
+              ]
+            }
+          ],
         tools: [{
           type: "function",
           function: {
@@ -283,42 +285,52 @@ Sois EXTRÊMEMENT PRÉCIS sur chaque détail visuel pour que je puisse reproduir
               additionalProperties: false
             }
           }
-        }],
-        tool_choice: { type: "function", function: { name: "extract_cv_template_structure" } }
-      })
-    });
+          }],
+          tool_choice: { type: "function", function: { name: "extract_cv_template_structure" } }
+        })
+      });
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error('❌ AI API error:', response.status, errorText);
-      
-      if (response.status === 429) {
-        throw new Error('Rate limit atteint. Veuillez réessayer dans quelques instants.');
-      }
-      if (response.status === 402) {
-        throw new Error('Crédits insuffisants. Veuillez ajouter des crédits à votre compte.');
-      }
-      
-      throw new Error(`Erreur API IA: ${response.status}`);
-    }
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('❌ AI API error:', response.status, errorText);
+        
+        if (response.status === 429) {
+          throw new Error('Rate limit atteint. Veuillez réessayer dans quelques instants.');
+        }
+        if (response.status === 402) {
+          throw new Error('Crédits insuffisants. Veuillez ajouter des crédits à votre compte.');
+        }
+        
+        // En cas d'erreur, utiliser la structure par défaut
+        console.log('⚠️ AI analysis failed, using default structure');
+        structureData = getDefaultStructure();
+      } else {
+        const aiResult = await response.json();
+        console.log('✅ AI analysis completed');
 
-    const aiResult = await response.json();
-    console.log('✅ AI analysis completed');
-
-    // Extraire la structure du résultat
-    let structureData;
-    if (aiResult.choices?.[0]?.message?.tool_calls?.[0]?.function?.arguments) {
-      try {
-        structureData = JSON.parse(aiResult.choices[0].message.tool_calls[0].function.arguments);
-        console.log('✅ Structure extracted successfully');
-      } catch (parseError) {
-        console.error('❌ Failed to parse AI response:', parseError);
-        throw new Error('Erreur lors du parsing de la réponse IA');
+        // Extraire la structure du résultat
+        if (aiResult.choices?.[0]?.message?.tool_calls?.[0]?.function?.arguments) {
+          try {
+            structureData = JSON.parse(aiResult.choices[0].message.tool_calls[0].function.arguments);
+            console.log('✅ Structure extracted successfully from AI');
+          } catch (parseError) {
+            console.error('❌ Failed to parse AI response:', parseError);
+            structureData = getDefaultStructure();
+          }
+        } else {
+          console.log('⚠️ No structured data from AI, using default');
+          structureData = getDefaultStructure();
+        }
       }
     } else {
-      // Fallback : structure par défaut si l'IA ne répond pas correctement
-      console.log('⚠️ Using fallback structure');
-      structureData = {
+      // Pour les fichiers Word/PPT, utiliser une structure par défaut intelligente
+      console.log('📝 Word/PPT document - using smart default structure');
+      structureData = getDefaultStructure();
+    }
+
+    // Fonction helper pour la structure par défaut
+    function getDefaultStructure() {
+      return {
         layout: { 
           type: "deux-colonnes", 
           column_widths: [35, 65],

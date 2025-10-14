@@ -124,9 +124,14 @@ export const TemplateManagement = () => {
     setIsAnalyzing(templateId);
 
     try {
+      const template = templates.find(t => t.id === templateId);
+      const isPdf = template?.file_type === 'pdf';
+      
       toast({
-        title: "Analyse en cours...",
-        description: "L'IA analyse la structure du template",
+        title: isPdf ? "Analyse IA en cours..." : "Création du template...",
+        description: isPdf 
+          ? "L'IA analyse la structure visuelle du PDF" 
+          : "Utilisation d'une structure par défaut intelligente",
       });
 
       const { data, error } = await supabase.functions.invoke('analyze-template', {
@@ -136,8 +141,10 @@ export const TemplateManagement = () => {
       if (error) throw error;
 
       toast({
-        title: "✅ Template analysé !",
-        description: "La structure a été extraite avec succès",
+        title: "✅ Template configuré !",
+        description: isPdf 
+          ? "La structure visuelle a été extraite avec succès" 
+          : "Template prêt à l'emploi avec structure par défaut",
       });
 
       fetchTemplates();
@@ -146,7 +153,7 @@ export const TemplateManagement = () => {
       toast({
         variant: "destructive",
         title: "Erreur",
-        description: error instanceof Error ? error.message : "Erreur lors de l'analyse",
+        description: error instanceof Error ? error.message : "Erreur lors de la configuration",
       });
     } finally {
       setIsAnalyzing(null);
@@ -166,7 +173,9 @@ export const TemplateManagement = () => {
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-2xl font-bold mb-2">Gestion des Templates</h2>
-          <p className="text-muted-foreground">Uploadez et analysez vos templates de CV</p>
+          <p className="text-muted-foreground">
+            Uploadez vos templates de CV (PDF pour analyse IA, .doc/.docx/.ppt/.pptx avec structure par défaut)
+          </p>
         </div>
 
         <label htmlFor="template-input">
@@ -225,10 +234,15 @@ export const TemplateManagement = () => {
                 <div className="text-sm text-muted-foreground mb-4">
                   <p><strong>Layout:</strong> {template.structure_data.layout?.type}</p>
                   <p><strong>Couleur principale:</strong> {template.structure_data.colors?.primary}</p>
+                  {template.file_type === 'pdf' && (
+                    <p className="text-xs text-accent mt-1">✨ Analysé par IA</p>
+                  )}
                 </div>
               ) : (
                 <p className="text-sm text-muted-foreground mb-4">
-                  Template non analysé
+                  {template.file_type === 'pdf' 
+                    ? 'Cliquez pour analyser avec IA' 
+                    : 'Cliquez pour configurer (structure par défaut)'}
                 </p>
               )}
 
@@ -246,7 +260,9 @@ export const TemplateManagement = () => {
                 ) : (
                   <>
                     <Sparkles className="w-4 h-4 mr-2" />
-                    {template.structure_data ? 'Réanalyser' : 'Analyser avec IA'}
+                    {template.structure_data 
+                      ? 'Reconfigurer' 
+                      : (template.file_type === 'pdf' ? 'Analyser avec IA' : 'Configurer')}
                   </>
                 )}
               </Button>
