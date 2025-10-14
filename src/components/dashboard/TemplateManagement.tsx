@@ -58,15 +58,17 @@ export const TemplateManagement = () => {
     setIsUploading(true);
 
     try {
-      // Vérifier le type de fichier
+      // Vérifier le type de fichier - supporter .doc, .docx, .pdf, .ppt, .pptx
       const allowedTypes = [
         'application/pdf',
-        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-        'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+        'application/msword', // .doc
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document', // .docx
+        'application/vnd.ms-powerpoint', // .ppt
+        'application/vnd.openxmlformats-officedocument.presentationml.presentation' // .pptx
       ];
 
       if (!allowedTypes.includes(file.type)) {
-        throw new Error('Format de fichier non supporté');
+        throw new Error('Format non supporté. Utilisez .doc, .docx, .pdf, .ppt ou .pptx');
       }
 
       // Upload du fichier
@@ -80,8 +82,10 @@ export const TemplateManagement = () => {
       if (uploadError) throw uploadError;
 
       // Déterminer le type de fichier
-      let fileType: 'pdf' | 'docx' | 'pptx' = 'pdf';
+      let fileType: 'pdf' | 'docx' | 'pptx' | 'doc' | 'ppt' = 'pdf';
+      if (file.type === 'application/msword') fileType = 'doc';
       if (file.type.includes('wordprocessingml')) fileType = 'docx';
+      if (file.type === 'application/vnd.ms-powerpoint') fileType = 'ppt';
       if (file.type.includes('presentationml')) fileType = 'pptx';
 
       // Créer l'enregistrement
@@ -180,7 +184,7 @@ export const TemplateManagement = () => {
             id="template-input"
             type="file"
             className="hidden"
-            accept=".pdf,.docx,.pptx"
+            accept=".pdf,.doc,.docx,.ppt,.pptx"
             onChange={handleTemplateUpload}
             disabled={isUploading}
           />

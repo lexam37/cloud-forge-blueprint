@@ -183,7 +183,7 @@ export type Database = {
     }
     Enums: {
       cv_status: "uploaded" | "analyzing" | "processed" | "error"
-      file_type: "pdf" | "docx" | "pptx"
+      file_type: "pdf" | "docx" | "pptx" | "doc" | "ppt"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -312,7 +312,7 @@ export const Constants = {
   public: {
     Enums: {
       cv_status: ["uploaded", "analyzing", "processed", "error"],
-      file_type: ["pdf", "docx", "pptx"],
+      file_type: ["pdf", "docx", "pptx", "doc", "ppt"],
     },
   },
 } as const
