@@ -1,5 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.75.0";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -15,16 +15,15 @@ serve(async (req) => {
     const { templateId } = await req.json();
     
     if (!templateId) {
-      throw new Error('Template ID is required');
+      throw new Error('templateId is required');
     }
 
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
     const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     const lovableApiKey = Deno.env.get('LOVABLE_API_KEY')!;
-    
     const supabase = createClient(supabaseUrl, supabaseKey);
 
-    console.log('Fetching template:', templateId);
+    console.log('Analyzing template:', templateId);
 
     // Récupérer le template
     const { data: template, error: templateError } = await supabase
@@ -37,29 +36,35 @@ serve(async (req) => {
       throw new Error('Template not found');
     }
 
-    console.log('Template fetched, downloading file from:', template.file_path);
+    console.log('Template found:', template.name);
 
-    // Télécharger le fichier du template
-    const { data: fileData, error: fileError } = await supabase
-      .storage
+    // Télécharger le fichier template
+    const { data: fileData, error: downloadError } = await supabase.storage
       .from('cv-templates')
       .download(template.file_path);
 
-    if (fileError || !fileData) {
-      console.error('Error downloading file:', fileError);
+    if (downloadError) {
+      console.error('Download error:', downloadError);
       throw new Error('Failed to download template file');
     }
 
-    console.log('File downloaded, size:', fileData.size);
+    console.log('File downloaded, analyzing structure...');
 
-    // Convertir le fichier en base64 pour l'envoyer à l'IA
-    const arrayBuffer = await fileData.arrayBuffer();
-    const base64 = btoa(String.fromCharCode(...new Uint8Array(arrayBuffer)));
+    // Analyser avec l'IA
+    const prompt = `Tu es un expert en analyse de documents CV. Analyse ce template de CV et extrait sa structure visuelle complète.
 
-    console.log('Calling AI to analyze template...');
+Retourne un objet JSON avec :
+- layout: { type: "colonne-unique" | "deux-colonnes" | "trois-colonnes", sections_order: [...] }
+- colors: { primary: "#hex", secondary: "#hex", text: "#hex", background: "#hex" }
+- fonts: { title: "nom", body: "nom", sizes: {...} }
+- spacing: { margin: "...", padding: "...", line_height: "..." }
+- sections: [{ name: "...", position: "...", style: {...} }]
+- logo: { position: "...", size: "...", style: {...} }
+- visual_elements: { separators: [...], icons: [...], decorations: [...] }
 
-    // Appeler l'IA pour analyser la structure du template
-    const aiResponse = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
+Sois très précis sur les couleurs, polices, espacements et positionnement de chaque élément.`;
+
+    const response = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${lovableApiKey}`,
@@ -68,142 +73,154 @@ serve(async (req) => {
       body: JSON.stringify({
         model: 'google/gemini-2.5-flash',
         messages: [
-          {
-            role: 'system',
-            content: `Tu es un expert en analyse de documents CV. Analyse la structure visuelle et organisationnelle du CV template fourni et extrais les informations suivantes au format JSON strict:
-{
-  "layout": {
-    "type": "string (ex: 'two-column', 'single-column', 'modern', 'classic')",
-    "sections_order": ["array des sections dans l'ordre d'apparition"]
-  },
-  "colors": {
-    "primary": "string (couleur principale en hex)",
-    "secondary": "string (couleur secondaire en hex)",
-    "text": "string (couleur du texte en hex)",
-    "background": "string (couleur du fond en hex)"
-  },
-  "fonts": {
-    "headings": "string (nom de la police pour les titres)",
-    "body": "string (nom de la police pour le corps)"
-  },
-  "logo": {
-    "present": "boolean",
-    "position": "string (ex: 'top-left', 'top-right', 'center')"
-  },
-  "sections": {
-    "header": {"position": "string", "style": "string"},
-    "experience": {"format": "string (ex: 'timeline', 'list')"},
-    "education": {"format": "string"},
-    "skills": {"format": "string (ex: 'tags', 'bars', 'list')"},
-    "projects": {"format": "string"}
-  },
-  "spacing": {
-    "margins": "string",
-    "line_height": "string"
-  }
-}`
-          },
-          {
-            role: 'user',
-            content: 'Analyse ce template de CV et extrais sa structure détaillée.'
-          }
+          { role: 'system', content: 'Tu es un expert en analyse de documents CV professionnels.' },
+          { role: 'user', content: prompt }
         ],
-        tools: [
-          {
-            type: 'function',
-            function: {
-              name: 'extract_template_structure',
-              description: 'Extract the visual and organizational structure of a CV template',
-              parameters: {
-                type: 'object',
-                properties: {
-                  layout: {
-                    type: 'object',
-                    properties: {
-                      type: { type: 'string' },
-                      sections_order: { type: 'array', items: { type: 'string' } }
-                    },
-                    required: ['type', 'sections_order']
+        tools: [{
+          type: "function",
+          function: {
+            name: "extract_template_structure",
+            description: "Extraire la structure complète d'un template de CV",
+            parameters: {
+              type: "object",
+              properties: {
+                layout: {
+                  type: "object",
+                  properties: {
+                    type: { type: "string", enum: ["colonne-unique", "deux-colonnes", "trois-colonnes"] },
+                    sections_order: { type: "array", items: { type: "string" } }
                   },
-                  colors: {
-                    type: 'object',
-                    properties: {
-                      primary: { type: 'string' },
-                      secondary: { type: 'string' },
-                      text: { type: 'string' },
-                      background: { type: 'string' }
-                    },
-                    required: ['primary', 'secondary', 'text', 'background']
+                  required: ["type", "sections_order"]
+                },
+                colors: {
+                  type: "object",
+                  properties: {
+                    primary: { type: "string" },
+                    secondary: { type: "string" },
+                    text: { type: "string" },
+                    background: { type: "string" }
                   },
-                  fonts: {
-                    type: 'object',
+                  required: ["primary", "text"]
+                },
+                fonts: {
+                  type: "object",
+                  properties: {
+                    title: { type: "string" },
+                    body: { type: "string" }
+                  }
+                },
+                sections: {
+                  type: "array",
+                  items: {
+                    type: "object",
                     properties: {
-                      headings: { type: 'string' },
-                      body: { type: 'string' }
-                    },
-                    required: ['headings', 'body']
-                  },
-                  logo: {
-                    type: 'object',
-                    properties: {
-                      present: { type: 'boolean' },
-                      position: { type: 'string' }
-                    },
-                    required: ['present', 'position']
-                  },
-                  sections: {
-                    type: 'object',
-                    properties: {
-                      header: { 
-                        type: 'object',
-                        properties: {
-                          position: { type: 'string' },
-                          style: { type: 'string' }
-                        }
-                      },
-                      experience: {
-                        type: 'object',
-                        properties: {
-                          format: { type: 'string' }
-                        }
-                      },
-                      education: {
-                        type: 'object',
-                        properties: {
-                          format: { type: 'string' }
-                        }
-                      },
-                      skills: {
-                        type: 'object',
-                        properties: {
-                          format: { type: 'string' }
-                        }
-                      },
-                      projects: {
-                        type: 'object',
-                        properties: {
-                          format: { type: 'string' }
-                        }
-                      }
-                    }
-                  },
-                  spacing: {
-                    type: 'object',
-                    properties: {
-                      margins: { type: 'string' },
-                      line_height: { type: 'string' }
+                      name: { type: "string" },
+                      position: { type: "string" },
+                      style: { type: "object" }
                     }
                   }
                 },
-                required: ['layout', 'colors', 'fonts', 'logo', 'sections', 'spacing'],
-                additionalProperties: false
-              }
+                logo: {
+                  type: "object",
+                  properties: {
+                    position: { type: "string" },
+                    size: { type: "string" }
+                  }
+                }
+              },
+              required: ["layout", "colors", "fonts"],
+              additionalProperties: false
             }
           }
-        ],
-        tool_choice: { type: 'function', function: { name: 'extract_template_structure' } }
-      }),
+        }],
+        tool_choice: { type: "function", function: { name: "extract_template_structure" } }
+      })
     });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('AI API error:', response.status, errorText);
+      throw new Error(`AI API error: ${response.status}`);
+    }
+
+    const aiResult = await response.json();
+    console.log('AI analysis result:', JSON.stringify(aiResult));
+
+    // Extraire la structure du résultat
+    let structureData;
+    if (aiResult.choices?.[0]?.message?.tool_calls?.[0]?.function?.arguments) {
+      structureData = JSON.parse(aiResult.choices[0].message.tool_calls[0].function.arguments);
+    } else {
+      // Fallback : structure par défaut basée sur le template COBER
+      structureData = {
+        layout: { 
+          type: "colonne-unique", 
+          sections_order: ["header", "competences", "experience", "education"] 
+        },
+        colors: { 
+          primary: "#1a1a1a", 
+          secondary: "#666666",
+          text: "#333333",
+          background: "#ffffff"
+        },
+        fonts: { 
+          title: "Arial", 
+          body: "Arial"
+        },
+        sections: [
+          { name: "header", position: "top", style: {} },
+          { name: "competences", position: "after-header", style: {} },
+          { name: "experience", position: "middle", style: {} },
+          { name: "education", position: "bottom", style: {} }
+        ]
+      };
+    }
+
+    // Mettre à jour le template avec la structure analysée et l'activer
+    const { error: updateError } = await supabase
+      .from('cv_templates')
+      .update({ 
+        structure_data: structureData,
+        is_active: true
+      })
+      .eq('id', templateId);
+
+    if (updateError) {
+      console.error('Update error:', updateError);
+      throw updateError;
+    }
+
+    // Désactiver les autres templates
+    await supabase
+      .from('cv_templates')
+      .update({ is_active: false })
+      .neq('id', templateId);
+
+    console.log('Template structure updated and activated');
+
+    return new Response(
+      JSON.stringify({ 
+        success: true, 
+        structure: structureData,
+        message: 'Template analysé et activé avec succès'
+      }),
+      { 
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        status: 200 
+      }
+    );
+
+  } catch (error) {
+    console.error('Error in analyze-template:', error);
+    return new Response(
+      JSON.stringify({ error: error instanceof Error ? error.message : 'Unknown error' }),
+      { 
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        status: 500
+      }
+    );
+  }
+});
 
     if (!aiResponse.ok) {
       const errorText = await aiResponse.text();

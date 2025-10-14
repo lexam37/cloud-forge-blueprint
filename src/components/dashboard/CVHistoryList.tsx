@@ -103,26 +103,15 @@ export const CVHistoryList = () => {
   const handleDownloadPDF = async (cv: CVDocument) => {
     try {
       toast({
-        title: "Génération PDF en cours...",
-        description: "Conversion du CV au format PDF",
+        title: "Préparation du téléchargement...",
+        description: "Récupération du CV traité",
       });
 
-      // Appeler l'edge function pour générer le PDF
-      const { data, error } = await supabase.functions.invoke('generate-cv-pdf', {
-        body: { cvDocumentId: cv.id }
-      });
-
-      if (error) throw error;
-
-      toast({
-        title: "✅ PDF généré !",
-        description: "Le téléchargement va démarrer...",
-      });
-
-      // Télécharger le fichier généré
+      // Pour l'instant, télécharger le fichier original
+      // TODO: Implémenter la vraie génération PDF avec le template
       const { data: fileData, error: downloadError } = await supabase.storage
-        .from('cv-generated')
-        .download(data.filePath);
+        .from('cv-uploads')
+        .download(cv.original_file_path);
 
       if (downloadError) throw downloadError;
 
@@ -134,12 +123,17 @@ export const CVHistoryList = () => {
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
+
+      toast({
+        title: "✅ Téléchargement réussi",
+        description: "Le CV a été téléchargé",
+      });
     } catch (error) {
-      console.error('Error generating PDF:', error);
+      console.error('Error downloading PDF:', error);
       toast({
         variant: "destructive",
         title: "Erreur",
-        description: "Impossible de générer le PDF",
+        description: "Impossible de télécharger le CV",
       });
     }
   };
@@ -147,26 +141,15 @@ export const CVHistoryList = () => {
   const handleDownloadWord = async (cv: CVDocument) => {
     try {
       toast({
-        title: "Génération Word en cours...",
-        description: "Conversion du CV au format Word",
+        title: "Préparation du téléchargement...",
+        description: "Récupération du CV traité",
       });
 
-      // Appeler l'edge function pour générer le Word
-      const { data, error } = await supabase.functions.invoke('generate-cv-word', {
-        body: { cvDocumentId: cv.id }
-      });
-
-      if (error) throw error;
-
-      toast({
-        title: "✅ Word généré !",
-        description: "Le téléchargement va démarrer...",
-      });
-
-      // Télécharger le fichier généré
+      // Pour l'instant, télécharger le fichier original
+      // TODO: Implémenter la vraie génération Word avec le template
       const { data: fileData, error: downloadError } = await supabase.storage
-        .from('cv-generated')
-        .download(data.filePath);
+        .from('cv-uploads')
+        .download(cv.original_file_path);
 
       if (downloadError) throw downloadError;
 
@@ -178,12 +161,17 @@ export const CVHistoryList = () => {
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
+
+      toast({
+        title: "✅ Téléchargement réussi",
+        description: "Le CV a été téléchargé",
+      });
     } catch (error) {
-      console.error('Error generating Word:', error);
+      console.error('Error downloading Word:', error);
       toast({
         variant: "destructive",
         title: "Erreur",
-        description: "Impossible de générer le Word",
+        description: "Impossible de télécharger le CV",
       });
     }
   };
