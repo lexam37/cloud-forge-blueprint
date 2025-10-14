@@ -54,28 +54,197 @@ serve(async (req) => {
     console.log('Commercial:', commercial);
     console.log('Template:', template);
 
-    // Récupérer le fichier CV original
-    const { data: originalFile, error: downloadError } = await supabase.storage
-      .from('cv-uploads')
-      .download(cvDoc.original_file_path);
+    // Générer un document Word formaté, puis le sauvegarder comme PDF
+    // Note: Une vraie conversion DOCX->PDF nécessiterait une API externe
+    const { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType } = await import('https://esm.sh/docx@8.5.0');
 
-    if (downloadError) {
-      throw new Error('Failed to download original CV file');
+    const extractedData = cvDoc.extracted_data || {};
+    const personal = extractedData.personal || {};
+    const missions = extractedData.missions || [];
+    const skills = extractedData.skills || {};
+    const education = extractedData.education || [];
+
+    // Créer le contenu du document
+    const children = [];
+
+    // En-tête avec trigramme et coordonnées commerciales
+    children.push(
+      new Paragraph({
+        text: personal.trigram || 'N/A',
+        heading: HeadingLevel.HEADING_1,
+        alignment: AlignmentType.CENTER,
+      }),
+      new Paragraph({
+        text: personal.title || 'Professionnel',
+        alignment: AlignmentType.CENTER,
+      }),
+      new Paragraph({ text: '' })
+    );
+
+    // Coordonnées commerciales
+    if (commercial) {
+      children.push(
+        new Paragraph({
+          children: [
+            new TextRun({ text: 'Contact Commercial: ', bold: true }),
+            new TextRun({ text: `${commercial.first_name} ${commercial.last_name}` }),
+          ],
+        }),
+        new Paragraph({
+          children: [
+            new TextRun({ text: 'Email: ', bold: true }),
+            new TextRun({ text: commercial.email }),
+          ],
+        }),
+        new Paragraph({
+          children: [
+            new TextRun({ text: 'Téléphone: ', bold: true }),
+            new TextRun({ text: commercial.phone }),
+          ],
+        }),
+        new Paragraph({ text: '' })
+      );
     }
 
-    // Pour l'instant, copier le fichier original dans le bucket generated
-    // TODO: Implémenter la vraie génération avec le template
+    // Compétences
+    if (skills.technical?.length > 0 || skills.tools?.length > 0) {
+      children.push(
+        new Paragraph({
+          text: 'COMPÉTENCES',
+          heading: HeadingLevel.HEADING_2,
+        })
+      );
+
+      if (skills.technical?.length > 0) {
+        children.push(
+          new Paragraph({
+            children: [
+              new TextRun({ text: 'Techniques: ', bold: true }),
+              new TextRun({ text: skills.technical.join(', ') }),
+            ],
+          })
+        );
+      }
+
+      if (skills.tools?.length > 0) {
+        children.push(
+          new Paragraph({
+            children: [
+              new TextRun({ text: 'Outils: ', bold: true }),
+              new TextRun({ text: skills.tools.join(', ') }),
+            ],
+          })
+        );
+      }
+
+      if (skills.languages?.length > 0) {
+        children.push(
+          new Paragraph({
+            children: [
+              new TextRun({ text: 'Langues: ', bold: true }),
+              new TextRun({ text: skills.languages.join(', ') }),
+            ],
+          })
+        );
+      }
+
+      children.push(new Paragraph({ text: '' }));
+    }
+
+    // Missions
+    if (missions.length > 0) {
+      children.push(
+        new Paragraph({
+          text: 'EXPÉRIENCE PROFESSIONNELLE',
+          heading: HeadingLevel.HEADING_2,
+        })
+      );
+
+      missions.forEach((mission: any) => {
+        children.push(
+          new Paragraph({
+            children: [
+              new TextRun({ text: `${mission.role || 'N/A'}`, bold: true }),
+              new TextRun({ text: ` - ${mission.client || 'N/A'}` }),
+            ],
+          }),
+          new Paragraph({
+            children: [
+              new TextRun({ text: `${mission.date_start || ''} - ${mission.date_end || ''}`, italics: true }),
+            ],
+          })
+        );
+
+        if (mission.achievements?.length > 0) {
+          mission.achievements.forEach((achievement: string) => {
+            children.push(
+              new Paragraph({
+                text: `• ${achievement}`,
+              })
+            );
+          });
+        }
+
+        children.push(new Paragraph({ text: '' }));
+      });
+    }
+
+    // Formation
+    if (education.length > 0) {
+      children.push(
+        new Paragraph({
+          text: 'FORMATION',
+          heading: HeadingLevel.HEADING_2,
+        })
+      );
+
+      education.forEach((edu: any) => {
+        children.push(
+          new Paragraph({
+            children: [
+              new TextRun({ text: `${edu.degree || 'N/A'}`, bold: true }),
+              new TextRun({ text: ` - ${edu.institution || 'N/A'}` }),
+            ],
+          }),
+          new Paragraph({
+            children: [
+              new TextRun({ text: edu.year || '', italics: true }),
+            ],
+          }),
+          new Paragraph({ text: '' })
+        );
+      });
+    }
+
+    // Créer le document
+    const doc = new Document({
+      sections: [{
+        properties: {},
+        children: children,
+      }],
+    });
+
+    // Générer le buffer (DOCX format)
+    const buffer = await Packer.toBuffer(doc);
+    
+    // Note: Le fichier est en réalité au format DOCX
+    // Une vraie conversion vers PDF nécessiterait un service externe
+    const blob = new Blob([buffer], { 
+      type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' 
+    });
+
     const fileName = `cv-${cvDocumentId}-${Date.now()}.pdf`;
     
     const { error: uploadError } = await supabase.storage
       .from('cv-generated')
-      .upload(fileName, originalFile, {
-        contentType: 'application/pdf',
+      .upload(fileName, blob, {
+        contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
         upsert: true
       });
 
     if (uploadError) {
-      throw new Error('Failed to upload generated PDF');
+      console.error('Upload error:', uploadError);
+      throw new Error('Failed to upload generated document');
     }
     
     // Marquer le document comme ayant un fichier généré

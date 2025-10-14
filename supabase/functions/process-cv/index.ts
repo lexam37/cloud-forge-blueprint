@@ -77,22 +77,42 @@ serve(async (req) => {
       const bytes = new Uint8Array(arrayBuffer);
       
       if (fileType === 'pdf') {
-        // Pour les PDFs, utiliser pdf-parse
-        const pdfParse = await import('https://esm.sh/pdf-parse@1.1.1');
-        const pdfData = await pdfParse.default(bytes);
-        extractedText = pdfData.text;
+        // Pour les PDFs, utiliser pdfjs-dist compatible Deno
+        const pdfjsLib = await import('https://esm.sh/pdfjs-dist@3.11.174/build/pdf.js');
+        
+        const loadingTask = pdfjsLib.getDocument({ data: bytes });
+        const pdf = await loadingTask.promise;
+        
+        const textParts = [];
+        for (let i = 1; i <= pdf.numPages; i++) {
+          const page = await pdf.getPage(i);
+          const textContent = await page.getTextContent();
+          const pageText = textContent.items.map((item: any) => item.str).join(' ');
+          textParts.push(pageText);
+        }
+        
+        extractedText = textParts.join('\n\n');
         console.log('PDF text extracted, length:', extractedText.length);
-      } else if (fileType === 'docx') {
-        // Pour les DOCX, utiliser mammoth
+      } else if (fileType === 'docx' || fileType === 'doc') {
+        // Pour les DOCX et DOC, utiliser mammoth
         const mammoth = await import('https://esm.sh/mammoth@1.6.0');
         const result = await mammoth.extractRawText({ arrayBuffer });
         extractedText = result.value;
-        console.log('DOCX text extracted, length:', extractedText.length);
-      } else if (fileType === 'pptx') {
-        // Pour les PPTX, essayer d'extraire le texte basique
+        console.log(`${fileType.toUpperCase()} text extracted, length:`, extractedText.length);
+      } else if (fileType === 'pptx' || fileType === 'ppt') {
+        // Pour PPTX/PPT, utiliser une approche plus propre avec une limite de taille
         const textDecoder = new TextDecoder('utf-8', { fatal: false });
-        extractedText = textDecoder.decode(bytes);
-        console.log('PPTX text extracted (raw), length:', extractedText.length);
+        const rawText = textDecoder.decode(bytes);
+        
+        // Nettoyer et limiter le texte pour éviter les données binaires
+        const cleanText = rawText
+          .replace(/[^\x20-\x7E\n\r\t]/g, ' ') // Garder seulement les caractères imprimables
+          .replace(/\s+/g, ' ') // Normaliser les espaces
+          .trim();
+        
+        // Limiter à 50000 caractères pour éviter de dépasser les tokens
+        extractedText = cleanText.substring(0, 50000);
+        console.log(`${fileType.toUpperCase()} text extracted (cleaned), length:`, extractedText.length);
       } else {
         throw new Error(`Unsupported file type: ${fileType}`);
       }
