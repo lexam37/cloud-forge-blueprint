@@ -5,3 +5,9 @@ verify_jwt = false
 
 [functions.process-cv]
 verify_jwt = false
+
+[functions.generate-cv-pdf]
+verify_jwt = false
+
+[functions.generate-cv-word]
+verify_jwt = false

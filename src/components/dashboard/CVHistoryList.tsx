@@ -2,11 +2,17 @@ import { useEffect, useState } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { FileText, Download, Clock, CheckCircle2, AlertCircle, Loader2 } from "lucide-react";
+import { FileText, Download, Clock, CheckCircle2, AlertCircle, Loader2, FileDown } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { formatDistanceToNow } from "date-fns";
 import { fr } from "date-fns/locale";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 interface CVDocument {
   id: string;
@@ -94,36 +100,90 @@ export const CVHistoryList = () => {
     }
   };
 
-  const handleDownload = async (cv: CVDocument) => {
-    if (!cv.generated_file_path) return;
-
+  const handleDownloadPDF = async (cv: CVDocument) => {
     try {
-      const { data, error } = await supabase.storage
-        .from('cv-generated')
-        .download(cv.generated_file_path);
+      toast({
+        title: "Génération PDF en cours...",
+        description: "Conversion du CV au format PDF",
+      });
+
+      // Appeler l'edge function pour générer le PDF
+      const { data, error } = await supabase.functions.invoke('generate-cv-pdf', {
+        body: { cvDocumentId: cv.id }
+      });
 
       if (error) throw error;
 
-      // Créer un lien de téléchargement
-      const url = URL.createObjectURL(data);
+      toast({
+        title: "✅ PDF généré !",
+        description: "Le téléchargement va démarrer...",
+      });
+
+      // Télécharger le fichier généré
+      const { data: fileData, error: downloadError } = await supabase.storage
+        .from('cv-generated')
+        .download(data.filePath);
+
+      if (downloadError) throw downloadError;
+
+      const url = URL.createObjectURL(fileData);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `CV_${cv.original_file_name}`;
+      a.download = `CV_${cv.original_file_name.replace(/\.[^/.]+$/, '')}.pdf`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
-
-      toast({
-        title: "Téléchargement réussi",
-        description: "Le CV a été téléchargé avec succès",
-      });
     } catch (error) {
-      console.error('Error downloading CV:', error);
+      console.error('Error generating PDF:', error);
       toast({
         variant: "destructive",
         title: "Erreur",
-        description: "Impossible de télécharger le CV",
+        description: "Impossible de générer le PDF",
+      });
+    }
+  };
+
+  const handleDownloadWord = async (cv: CVDocument) => {
+    try {
+      toast({
+        title: "Génération Word en cours...",
+        description: "Conversion du CV au format Word",
+      });
+
+      // Appeler l'edge function pour générer le Word
+      const { data, error } = await supabase.functions.invoke('generate-cv-word', {
+        body: { cvDocumentId: cv.id }
+      });
+
+      if (error) throw error;
+
+      toast({
+        title: "✅ Word généré !",
+        description: "Le téléchargement va démarrer...",
+      });
+
+      // Télécharger le fichier généré
+      const { data: fileData, error: downloadError } = await supabase.storage
+        .from('cv-generated')
+        .download(data.filePath);
+
+      if (downloadError) throw downloadError;
+
+      const url = URL.createObjectURL(fileData);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `CV_${cv.original_file_name.replace(/\.[^/.]+$/, '')}.docx`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error('Error generating Word:', error);
+      toast({
+        variant: "destructive",
+        title: "Erreur",
+        description: "Impossible de générer le Word",
       });
     }
   };
@@ -205,11 +265,25 @@ export const CVHistoryList = () => {
               </div>
 
               <div className="flex gap-2 flex-shrink-0">
-                {cv.status === 'processed' && cv.generated_file_path && (
-                  <Button variant="outline" size="sm" onClick={() => handleDownload(cv)}>
-                    <Download className="w-4 h-4 mr-2" />
-                    Télécharger
-                  </Button>
+                {cv.status === 'processed' && (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button variant="outline" size="sm">
+                        <FileDown className="w-4 h-4 mr-2" />
+                        Télécharger
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuItem onClick={() => handleDownloadPDF(cv)}>
+                        <Download className="w-4 h-4 mr-2" />
+                        Format PDF
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => handleDownloadWord(cv)}>
+                        <Download className="w-4 h-4 mr-2" />
+                        Format Word (.docx)
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                 )}
               </div>
             </div>
