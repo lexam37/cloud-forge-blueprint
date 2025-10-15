@@ -42,7 +42,7 @@ serve(async (req) => {
       .limit(1)
       .maybeSingle();
 
-    // Récupérer un template actif
+    // Récupérer le template actif
     const { data: template, error: templateError } = await supabase
       .from('cv_templates')
       .select('*')
@@ -55,7 +55,12 @@ serve(async (req) => {
     console.log('Template:', template);
 
     // Importer la bibliothèque docx pour générer le document
-    const { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType, ImageRun, TableCell, TableRow, Table, WidthType, BorderStyle } = await import('https://esm.sh/docx@8.5.0');
+    const { 
+      Document, Packer, Paragraph, TextRun, HeadingLevel, 
+      AlignmentType, ImageRun, UnderlineType, 
+      convertInchesToTwip, convertMillimetersToTwip,
+      BorderStyle
+    } = await import('https://esm.sh/docx@8.5.0');
 
     const extractedData = cvDoc.extracted_data || {};
     const personal = extractedData.personal || {};
@@ -63,13 +68,36 @@ serve(async (req) => {
     const skills = extractedData.skills || {};
     const education = extractedData.education || [];
 
-    // Récupérer le style du template
+    // Récupérer le style détaillé du template
     const templateStyle = template?.structure_data || {};
-    const colors = templateStyle.colors || { primary: "#2563eb", text: "#1e293b" };
-    const fonts = templateStyle.fonts || { title_font: "Arial", body_font: "Arial", title_size: "18pt", body_size: "11pt" };
+    const colors = templateStyle.colors || { primary: "#2563eb", text: "#1e293b", secondary: "#64748b" };
+    const fonts = templateStyle.fonts || { 
+      title_font: "Calibri", 
+      body_font: "Calibri", 
+      title_size: "16pt", 
+      body_size: "11pt",
+      title_weight: "bold",
+      line_height: "1.15"
+    };
+    const spacing = templateStyle.spacing || {
+      section_spacing: "12pt",
+      element_spacing: "6pt",
+      padding: "10mm",
+      line_spacing: "1.15"
+    };
+    const sections = templateStyle.sections || [];
+    const visualElements = templateStyle.visual_elements || {};
+    const pageSettings = templateStyle.page || {};
+    
+    // Helpers pour convertir les valeurs
+    const ptToHalfPt = (pt: string) => parseInt(pt) * 2;
+    const colorToHex = (color: string) => color.replace('#', '');
+    const mmToTwip = (mm: string) => convertMillimetersToTwip(parseInt(mm));
     
     // Télécharger le logo commercial s'il existe
     let logoImage = null;
+    const logoSettings = visualElements.logo || { position: "top-left", size: "40x40mm" };
+    
     if (commercial?.logo_path) {
       try {
         const { data: logoData } = await supabase.storage
@@ -87,377 +115,443 @@ serve(async (req) => {
 
     // Créer le contenu du document
     const children = [];
+    const trigram = personal.trigram || 'XXX';
 
-    // En-tête avec logo et trigramme
-    const headerChildren = [];
-    
+    // Helper pour créer un paragraphe avec style de section
+    function createSectionTitle(sectionName: string) {
+      const sectionStyle = sections.find((s: any) => 
+        s.name.toLowerCase().includes(sectionName.toLowerCase())
+      ) || sections[0];
+      
+      const titleStyle = sectionStyle?.title_style || {};
+      const sectionSpacing = sectionStyle?.spacing || { top: "5mm", bottom: "5mm" };
+      const paragraph = sectionStyle?.paragraph || { alignment: "left" };
+      
+      return new Paragraph({
+        children: [
+          new TextRun({ 
+            text: sectionName.toUpperCase(),
+            bold: titleStyle.bold !== false,
+            size: ptToHalfPt(titleStyle.size || fonts.title_size),
+            color: colorToHex(titleStyle.color || colors.primary),
+            font: titleStyle.font || fonts.title_font,
+            underline: titleStyle.underline ? { type: UnderlineType.SINGLE } : undefined,
+          }),
+        ],
+        alignment: paragraph.alignment === "center" ? AlignmentType.CENTER : AlignmentType.LEFT,
+        spacing: {
+          before: mmToTwip(sectionSpacing.top || "5mm"),
+          after: mmToTwip(sectionSpacing.bottom || "5mm"),
+        }
+      });
+    }
+
+    // Helper pour créer un paragraphe de contenu
+    function createContentParagraph(textRuns: any[], indent = 0) {
+      return new Paragraph({
+        children: textRuns,
+        spacing: {
+          before: parseInt(spacing.element_spacing) * 20 || 120,
+          after: parseInt(spacing.element_spacing) * 20 || 120,
+          line: parseInt(fonts.line_height || "1.15") * 240,
+        },
+        indent: indent > 0 ? { left: convertInchesToTwip(indent) } : undefined,
+      });
+    }
+
+    // EN-TÊTE avec logo et informations du commercial
     if (logoImage) {
-      headerChildren.push(
+      const logoSize = visualElements.logo?.size || "40x40mm";
+      const [width, height] = logoSize.split('x').map((s: string) => parseInt(s));
+      
+      children.push(
         new Paragraph({
           children: [
             new ImageRun({
               data: logoImage,
               transformation: {
-                width: 80,
-                height: 80,
+                width: width * 2.83465, // mm to pixels (72 DPI)
+                height: height * 2.83465,
               },
             }),
           ],
           alignment: AlignmentType.LEFT,
+          spacing: { after: 240 }
         })
       );
     }
 
-    headerChildren.push(
-      new Paragraph({
-        children: [
-          new TextRun({ 
-            text: personal.trigram || 'N/A',
-            bold: true,
-            size: parseInt(fonts.title_size) * 2 || 48,
-            color: colors.primary.replace('#', ''),
-            font: fonts.title_font || 'Arial',
-          }),
-        ],
-        alignment: AlignmentType.CENTER,
-      }),
-      new Paragraph({
-        children: [
-          new TextRun({ 
-            text: personal.title || 'Professionnel',
-            size: parseInt(fonts.body_size) * 2 || 24,
-            color: colors.text.replace('#', ''),
-            font: fonts.body_font || 'Arial',
-          }),
-        ],
-        alignment: AlignmentType.CENTER,
-      }),
-      new Paragraph({ text: '' })
-    );
-
-    children.push(...headerChildren);
-
-    // Coordonnées commerciales dans un tableau pour meilleure mise en page
+    // Coordonnées du commercial
     if (commercial) {
       children.push(
-        new Paragraph({
-          children: [
-            new TextRun({ 
-              text: 'Contact Commercial',
-              bold: true,
-              size: parseInt(fonts.title_size) * 2 - 4 || 28,
-              color: colors.primary.replace('#', ''),
-              font: fonts.title_font || 'Arial',
-            }),
-          ],
-        }),
-        new Paragraph({
-          children: [
-            new TextRun({ 
-              text: 'Nom: ',
-              bold: true,
-              size: parseInt(fonts.body_size) * 2 || 22,
-              color: colors.text.replace('#', ''),
-              font: fonts.body_font || 'Arial',
-            }),
-            new TextRun({ 
-              text: `${commercial.first_name} ${commercial.last_name}`,
-              size: parseInt(fonts.body_size) * 2 || 22,
-              color: colors.text.replace('#', ''),
-              font: fonts.body_font || 'Arial',
-            }),
-          ],
-        }),
-        new Paragraph({
-          children: [
-            new TextRun({ 
-              text: 'Email: ',
-              bold: true,
-              size: parseInt(fonts.body_size) * 2 || 22,
-              color: colors.text.replace('#', ''),
-              font: fonts.body_font || 'Arial',
-            }),
-            new TextRun({ 
-              text: commercial.email,
-              size: parseInt(fonts.body_size) * 2 || 22,
-              color: colors.text.replace('#', ''),
-              font: fonts.body_font || 'Arial',
-            }),
-          ],
-        }),
-        new Paragraph({
-          children: [
-            new TextRun({ 
-              text: 'Téléphone: ',
-              bold: true,
-              size: parseInt(fonts.body_size) * 2 || 22,
-              color: colors.text.replace('#', ''),
-              font: fonts.body_font || 'Arial',
-            }),
-            new TextRun({ 
-              text: commercial.phone,
-              size: parseInt(fonts.body_size) * 2 || 22,
-              color: colors.text.replace('#', ''),
-              font: fonts.body_font || 'Arial',
-            }),
-          ],
-        }),
+        createSectionTitle('Contact Commercial'),
+        createContentParagraph([
+          new TextRun({ 
+            text: 'Nom: ',
+            bold: true,
+            size: ptToHalfPt(fonts.body_size),
+            color: colorToHex(colors.text),
+            font: fonts.body_font,
+          }),
+          new TextRun({ 
+            text: `${commercial.first_name} ${commercial.last_name}`,
+            size: ptToHalfPt(fonts.body_size),
+            color: colorToHex(colors.text),
+            font: fonts.body_font,
+          }),
+        ]),
+        createContentParagraph([
+          new TextRun({ 
+            text: 'Email: ',
+            bold: true,
+            size: ptToHalfPt(fonts.body_size),
+            color: colorToHex(colors.text),
+            font: fonts.body_font,
+          }),
+          new TextRun({ 
+            text: commercial.email,
+            size: ptToHalfPt(fonts.body_size),
+            color: colorToHex(colors.text),
+            font: fonts.body_font,
+          }),
+        ]),
+        createContentParagraph([
+          new TextRun({ 
+            text: 'Téléphone: ',
+            bold: true,
+            size: ptToHalfPt(fonts.body_size),
+            color: colorToHex(colors.text),
+            font: fonts.body_font,
+          }),
+          new TextRun({ 
+            text: commercial.phone,
+            size: ptToHalfPt(fonts.body_size),
+            color: colorToHex(colors.text),
+            font: fonts.body_font,
+          }),
+        ]),
         new Paragraph({ text: '' })
       );
     }
 
-    // Compétences avec style du template
-    if (skills.technical?.length > 0 || skills.tools?.length > 0) {
-      children.push(
-        new Paragraph({
-          children: [
-            new TextRun({ 
-              text: 'COMPÉTENCES',
-              bold: true,
-              size: parseInt(fonts.title_size) * 2 || 32,
-              color: colors.primary.replace('#', ''),
-              font: fonts.title_font || 'Arial',
-            }),
-          ],
-        })
-      );
+    // PROFIL - Trigramme + titre
+    children.push(
+      createSectionTitle('Profil'),
+      createContentParagraph([
+        new TextRun({ 
+          text: 'Trigramme: ',
+          bold: true,
+          size: ptToHalfPt(fonts.body_size),
+          color: colorToHex(colors.text),
+          font: fonts.body_font,
+        }),
+        new TextRun({ 
+          text: trigram,
+          size: ptToHalfPt(fonts.body_size),
+          color: colorToHex(colors.primary),
+          font: fonts.body_font,
+          bold: true,
+        }),
+      ]),
+      createContentParagraph([
+        new TextRun({ 
+          text: 'Titre: ',
+          bold: true,
+          size: ptToHalfPt(fonts.body_size),
+          color: colorToHex(colors.text),
+          font: fonts.body_font,
+        }),
+        new TextRun({ 
+          text: personal.title || 'N/A',
+          size: ptToHalfPt(fonts.body_size),
+          color: colorToHex(colors.text),
+          font: fonts.body_font,
+        }),
+      ]),
+      new Paragraph({ text: '' })
+    );
+
+    // COMPÉTENCES
+    if (skills.technical?.length > 0 || skills.tools?.length > 0 || skills.languages?.length > 0) {
+      children.push(createSectionTitle('Compétences'));
 
       if (skills.technical?.length > 0) {
         children.push(
-          new Paragraph({
-            children: [
+          createContentParagraph([
+            new TextRun({ 
+              text: 'Techniques: ',
+              bold: true,
+              size: ptToHalfPt(fonts.body_size),
+              color: colorToHex(colors.text),
+              font: fonts.body_font,
+            }),
+          ]),
+          ...skills.technical.map((skill: string) => 
+            createContentParagraph([
               new TextRun({ 
-                text: 'Techniques: ',
-                bold: true,
-                size: parseInt(fonts.body_size) * 2 || 22,
-                color: colors.text.replace('#', ''),
-                font: fonts.body_font || 'Arial',
+                text: `• ${skill}`,
+                size: ptToHalfPt(fonts.body_size),
+                color: colorToHex(colors.text),
+                font: fonts.body_font,
               }),
-              new TextRun({ 
-                text: skills.technical.join(', '),
-                size: parseInt(fonts.body_size) * 2 || 22,
-                color: colors.text.replace('#', ''),
-                font: fonts.body_font || 'Arial',
-              }),
-            ],
-          })
+            ], 0.3)
+          )
         );
       }
 
       if (skills.tools?.length > 0) {
         children.push(
-          new Paragraph({
-            children: [
-              new TextRun({ 
-                text: 'Outils: ',
-                bold: true,
-                size: parseInt(fonts.body_size) * 2 || 22,
-                color: colors.text.replace('#', ''),
-                font: fonts.body_font || 'Arial',
-              }),
-              new TextRun({ 
-                text: skills.tools.join(', '),
-                size: parseInt(fonts.body_size) * 2 || 22,
-                color: colors.text.replace('#', ''),
-                font: fonts.body_font || 'Arial',
-              }),
-            ],
-          })
+          createContentParagraph([
+            new TextRun({ 
+              text: 'Outils: ',
+              bold: true,
+              size: ptToHalfPt(fonts.body_size),
+              color: colorToHex(colors.text),
+              font: fonts.body_font,
+            }),
+            new TextRun({ 
+              text: skills.tools.join(', '),
+              size: ptToHalfPt(fonts.body_size),
+              color: colorToHex(colors.text),
+              font: fonts.body_font,
+            }),
+          ])
         );
       }
 
       if (skills.languages?.length > 0) {
         children.push(
-          new Paragraph({
-            children: [
-              new TextRun({ 
-                text: 'Langues: ',
-                bold: true,
-                size: parseInt(fonts.body_size) * 2 || 22,
-                color: colors.text.replace('#', ''),
-                font: fonts.body_font || 'Arial',
-              }),
-              new TextRun({ 
-                text: skills.languages.join(', '),
-                size: parseInt(fonts.body_size) * 2 || 22,
-                color: colors.text.replace('#', ''),
-                font: fonts.body_font || 'Arial',
-              }),
-            ],
-          })
+          createContentParagraph([
+            new TextRun({ 
+              text: 'Langues: ',
+              bold: true,
+              size: ptToHalfPt(fonts.body_size),
+              color: colorToHex(colors.text),
+              font: fonts.body_font,
+            }),
+            new TextRun({ 
+              text: skills.languages.join(', '),
+              size: ptToHalfPt(fonts.body_size),
+              color: colorToHex(colors.text),
+              font: fonts.body_font,
+            }),
+          ])
         );
       }
 
       children.push(new Paragraph({ text: '' }));
     }
 
-    // Missions avec style du template
+    // EXPÉRIENCES PROFESSIONNELLES
     if (missions.length > 0) {
-      children.push(
-        new Paragraph({
-          children: [
-            new TextRun({ 
-              text: 'EXPÉRIENCE PROFESSIONNELLE',
-              bold: true,
-              size: parseInt(fonts.title_size) * 2 || 32,
-              color: colors.primary.replace('#', ''),
-              font: fonts.title_font || 'Arial',
-            }),
-          ],
-        })
-      );
+      children.push(createSectionTitle('Expériences Professionnelles'));
 
       missions.forEach((mission: any) => {
+        // Titre de mission (Client)
         children.push(
-          new Paragraph({
-            children: [
-              new TextRun({ 
-                text: `${mission.role || 'N/A'}`,
-                bold: true,
-                size: parseInt(fonts.body_size) * 2 || 22,
-                color: colors.text.replace('#', ''),
-                font: fonts.body_font || 'Arial',
-              }),
-              new TextRun({ 
-                text: ` - ${mission.client || 'N/A'}`,
-                size: parseInt(fonts.body_size) * 2 || 22,
-                color: colors.text.replace('#', ''),
-                font: fonts.body_font || 'Arial',
-              }),
-            ],
-          }),
-          new Paragraph({
-            children: [
-              new TextRun({ 
-                text: `${mission.date_start || ''} - ${mission.date_end || ''}`,
-                italics: true,
-                size: parseInt(fonts.body_size) * 2 - 2 || 20,
-                color: colors.secondary?.replace('#', '') || colors.text.replace('#', ''),
-                font: fonts.body_font || 'Arial',
-              }),
-            ],
-          })
+          createContentParagraph([
+            new TextRun({ 
+              text: `${mission.client || 'N/A'}`,
+              bold: true,
+              size: ptToHalfPt(fonts.body_size),
+              color: colorToHex(colors.primary),
+              font: fonts.body_font,
+            }),
+          ])
         );
 
+        // Dates
+        children.push(
+          createContentParagraph([
+            new TextRun({ 
+              text: `${mission.date_start || ''} - ${mission.date_end || ''}`,
+              italics: true,
+              size: ptToHalfPt(fonts.body_size) - 2,
+              color: colorToHex(colors.secondary || colors.text),
+              font: fonts.body_font,
+            }),
+          ])
+        );
+
+        // Contexte
+        if (mission.context) {
+          children.push(
+            createContentParagraph([
+              new TextRun({ 
+                text: 'Contexte: ',
+                bold: true,
+                size: ptToHalfPt(fonts.body_size),
+                color: colorToHex(colors.text),
+                font: fonts.body_font,
+              }),
+              new TextRun({ 
+                text: mission.context,
+                size: ptToHalfPt(fonts.body_size),
+                color: colorToHex(colors.text),
+                font: fonts.body_font,
+              }),
+            ])
+          );
+        }
+
+        // Réalisations
         if (mission.achievements?.length > 0) {
+          children.push(
+            createContentParagraph([
+              new TextRun({ 
+                text: 'Réalisations:',
+                bold: true,
+                size: ptToHalfPt(fonts.body_size),
+                color: colorToHex(colors.text),
+                font: fonts.body_font,
+              }),
+            ])
+          );
+
           mission.achievements.forEach((achievement: string) => {
             children.push(
-              new Paragraph({
-                children: [
-                  new TextRun({ 
-                    text: `• ${achievement}`,
-                    size: parseInt(fonts.body_size) * 2 || 22,
-                    color: colors.text.replace('#', ''),
-                    font: fonts.body_font || 'Arial',
-                  }),
-                ],
-              })
+              createContentParagraph([
+                new TextRun({ 
+                  text: `• ${achievement}`,
+                  size: ptToHalfPt(fonts.body_size),
+                  color: colorToHex(colors.text),
+                  font: fonts.body_font,
+                }),
+              ], 0.3)
             );
           });
+        }
+
+        // Environnement technique
+        if (mission.environment?.length > 0) {
+          children.push(
+            createContentParagraph([
+              new TextRun({ 
+                text: 'Environnement: ',
+                bold: true,
+                size: ptToHalfPt(fonts.body_size),
+                color: colorToHex(colors.text),
+                font: fonts.body_font,
+              }),
+              new TextRun({ 
+                text: mission.environment.join(', '),
+                size: ptToHalfPt(fonts.body_size),
+                color: colorToHex(colors.text),
+                font: fonts.body_font,
+              }),
+            ])
+          );
         }
 
         children.push(new Paragraph({ text: '' }));
       });
     }
 
-    // Formation avec style du template
+    // FORMATION
     if (education.length > 0) {
-      children.push(
-        new Paragraph({
-          children: [
-            new TextRun({ 
-              text: 'FORMATION',
-              bold: true,
-              size: parseInt(fonts.title_size) * 2 || 32,
-              color: colors.primary.replace('#', ''),
-              font: fonts.title_font || 'Arial',
-            }),
-          ],
-        })
-      );
+      children.push(createSectionTitle('Formation'));
 
       education.forEach((edu: any) => {
         children.push(
-          new Paragraph({
-            children: [
-              new TextRun({ 
-                text: `${edu.degree || 'N/A'}`,
-                bold: true,
-                size: parseInt(fonts.body_size) * 2 || 22,
-                color: colors.text.replace('#', ''),
-                font: fonts.body_font || 'Arial',
-              }),
-              new TextRun({ 
-                text: ` - ${edu.institution || 'N/A'}`,
-                size: parseInt(fonts.body_size) * 2 || 22,
-                color: colors.text.replace('#', ''),
-                font: fonts.body_font || 'Arial',
-              }),
-            ],
-          }),
-          new Paragraph({
-            children: [
-              new TextRun({ 
-                text: edu.year || '',
-                italics: true,
-                size: parseInt(fonts.body_size) * 2 - 2 || 20,
-                color: colors.secondary?.replace('#', '') || colors.text.replace('#', ''),
-                font: fonts.body_font || 'Arial',
-              }),
-            ],
-          }),
-          new Paragraph({ text: '' })
+          createContentParagraph([
+            new TextRun({ 
+              text: edu.degree || 'N/A',
+              bold: true,
+              size: ptToHalfPt(fonts.body_size),
+              color: colorToHex(colors.text),
+              font: fonts.body_font,
+            }),
+          ]),
+          createContentParagraph([
+            new TextRun({ 
+              text: `${edu.institution || ''} - ${edu.year || ''}`,
+              italics: true,
+              size: ptToHalfPt(fonts.body_size) - 2,
+              color: colorToHex(colors.secondary || colors.text),
+              font: fonts.body_font,
+            }),
+          ])
         );
+
+        if (edu.field) {
+          children.push(
+            createContentParagraph([
+              new TextRun({ 
+                text: `Spécialité: ${edu.field}`,
+                size: ptToHalfPt(fonts.body_size),
+                color: colorToHex(colors.text),
+                font: fonts.body_font,
+              }),
+            ])
+          );
+        }
+
+        children.push(new Paragraph({ text: '' }));
       });
     }
 
-    // Créer le document
+    // Créer le document avec les marges du template
+    const layout = templateStyle.layout || {};
+    const margins = layout.margins || { top: "20mm", right: "15mm", bottom: "20mm", left: "15mm" };
+    
     const doc = new Document({
       sections: [{
-        properties: {},
-        children: children,
+        properties: {
+          page: {
+            margin: {
+              top: mmToTwip(margins.top || "20mm"),
+              right: mmToTwip(margins.right || "15mm"),
+              bottom: mmToTwip(margins.bottom || "20mm"),
+              left: mmToTwip(margins.left || "15mm"),
+            },
+          },
+        },
+        children,
       }],
     });
 
-    // Générer le buffer
+    // Générer le fichier DOCX
     const buffer = await Packer.toBuffer(doc);
     const blob = new Blob([buffer], { 
       type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' 
     });
 
-    // Générer le nom du fichier avec le trigramme
-    const trigram = personal.trigram || 'XXX';
+    // Nom du fichier généré
     const fileName = `${trigram} DC.docx`;
-    const storagePath = `${cvDocumentId}/${fileName}`;
+    const filePath = `generated-${Date.now()}-${fileName}`;
 
-    // Uploader dans le bucket cv-generated
+    // Upload vers Supabase Storage
     const { error: uploadError } = await supabase.storage
       .from('cv-generated')
-      .upload(storagePath, blob, {
+      .upload(filePath, blob, {
         contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
         upsert: true
       });
 
     if (uploadError) {
-      console.error('Upload error:', uploadError);
-      throw new Error('Failed to upload generated Word file');
+      throw uploadError;
     }
-    
-    // Marquer le document comme ayant un fichier généré
-    await supabase
+
+    // Mettre à jour le document avec le fichier généré
+    const { error: updateError } = await supabase
       .from('cv_documents')
       .update({ 
-        generated_file_path: storagePath,
-        generated_file_type: 'docx'
+        generated_file_path: filePath,
+        generated_file_type: 'docx',
+        status: 'completed'
       })
       .eq('id', cvDocumentId);
 
+    if (updateError) {
+      throw updateError;
+    }
+
     return new Response(
       JSON.stringify({ 
-        success: true,
-        filePath: storagePath,
-        fileName: fileName,
-        message: 'Word document generated successfully'
+        success: true, 
+        filePath,
+        fileName,
+        message: 'CV Word généré avec succès'
       }),
       { 
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -468,7 +562,9 @@ serve(async (req) => {
   } catch (error) {
     console.error('Error in generate-cv-word:', error);
     return new Response(
-      JSON.stringify({ error: error instanceof Error ? error.message : 'Unknown error' }),
+      JSON.stringify({ 
+        error: error instanceof Error ? error.message : 'Unknown error' 
+      }),
       { 
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         status: 500
