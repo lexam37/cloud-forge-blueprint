@@ -538,7 +538,7 @@ serve(async (req) => {
       .update({ 
         generated_file_path: filePath,
         generated_file_type: 'docx',
-        status: 'completed'
+        status: 'processed'
       })
       .eq('id', cvDocumentId);
 
