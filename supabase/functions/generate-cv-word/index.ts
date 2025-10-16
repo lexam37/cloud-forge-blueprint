@@ -59,7 +59,7 @@ serve(async (req) => {
       Document, Packer, Paragraph, TextRun, HeadingLevel, 
       AlignmentType, ImageRun, UnderlineType, 
       convertInchesToTwip, convertMillimetersToTwip,
-      BorderStyle
+      BorderStyle, Header
     } = await import('https://esm.sh/docx@8.5.0');
 
     const extractedData = cvDoc.extracted_data || {};
@@ -116,6 +116,36 @@ serve(async (req) => {
     // Créer le contenu du document
     const children = [];
     const trigram = personal.trigram || 'XXX';
+    
+    // Créer l'en-tête si le logo doit y être
+    let headers = undefined;
+    const logoPosition = visualElements.logo?.position || 'body';
+    
+    if (logoImage && logoPosition === 'header') {
+      const logoSize = visualElements.logo?.size || "40x40mm";
+      const [width, height] = logoSize.split('x').map((s: string) => parseInt(s));
+      const originalWidth = visualElements.logo?.original_width || width;
+      const originalHeight = visualElements.logo?.original_height || height;
+      
+      headers = {
+        default: new Header({
+          children: [
+            new Paragraph({
+              children: [
+                new ImageRun({
+                  data: logoImage,
+                  transformation: {
+                    width: originalWidth * 2.83465,
+                    height: originalHeight * 2.83465,
+                  },
+                }),
+              ],
+              alignment: AlignmentType.LEFT,
+            }),
+          ],
+        }),
+      };
+    }
 
     // Helper pour créer un paragraphe avec style de section
     function createSectionTitle(sectionName: string) {
@@ -159,10 +189,12 @@ serve(async (req) => {
       });
     }
 
-    // EN-TÊTE avec logo et informations du commercial
-    if (logoImage) {
+    // Logo dans le corps si pas dans l'en-tête
+    if (logoImage && logoPosition !== 'header') {
       const logoSize = visualElements.logo?.size || "40x40mm";
       const [width, height] = logoSize.split('x').map((s: string) => parseInt(s));
+      const originalWidth = visualElements.logo?.original_width || width;
+      const originalHeight = visualElements.logo?.original_height || height;
       
       children.push(
         new Paragraph({
@@ -170,8 +202,8 @@ serve(async (req) => {
             new ImageRun({
               data: logoImage,
               transformation: {
-                width: width * 2.83465, // mm to pixels (72 DPI)
-                height: height * 2.83465,
+                width: originalWidth * 2.83465,
+                height: originalHeight * 2.83465,
               },
             }),
           ],
@@ -506,6 +538,7 @@ serve(async (req) => {
             },
           },
         },
+        headers,
         children,
       }],
     });
