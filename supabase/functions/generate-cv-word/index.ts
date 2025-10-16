@@ -94,19 +94,23 @@ serve(async (req) => {
     const colorToHex = (color: string) => color.replace('#', '');
     const mmToTwip = (mm: string) => convertMillimetersToTwip(parseInt(mm));
     
-    // Télécharger le logo commercial s'il existe
+    // Télécharger le logo - priorité au logo extrait du template
     let logoImage = null;
-    const logoSettings = visualElements.logo || { position: "top-left", size: "40x40mm" };
+    const logoSettings = visualElements.logo || { position: "body", size: "40x40mm" };
     
-    if (commercial?.logo_path) {
+    // Essayer d'abord le logo extrait du template
+    const logoPath = template?.structure_data?.visual_elements?.logo?.extracted_logo_path || commercial?.logo_path;
+    
+    if (logoPath) {
       try {
         const { data: logoData } = await supabase.storage
           .from('company-logos')
-          .download(commercial.logo_path);
+          .download(logoPath);
         
         if (logoData) {
           const logoBuffer = await logoData.arrayBuffer();
           logoImage = new Uint8Array(logoBuffer);
+          console.log('Logo chargé depuis:', logoPath);
         }
       } catch (err) {
         console.log('Could not load logo:', err);
@@ -117,34 +121,92 @@ serve(async (req) => {
     const children = [];
     const trigram = personal.trigram || 'XXX';
     
-    // Créer l'en-tête si le logo doit y être
+    // Créer l'en-tête si le logo ou les coordonnées commerciales doivent y être
     let headers = undefined;
     const logoPosition = visualElements.logo?.position || 'body';
+    const contactPosition = templateStyle.element_styles?.commercial_contact?.position || 'body';
     
-    if (logoImage && logoPosition === 'header') {
-      const logoSize = visualElements.logo?.size || "40x40mm";
-      const [width, height] = logoSize.split('x').map((s: string) => parseInt(s));
-      const originalWidth = visualElements.logo?.original_width || width;
-      const originalHeight = visualElements.logo?.original_height || height;
+    if (logoImage && logoPosition === 'header' || contactPosition === 'header') {
+      const headerChildren = [];
       
-      headers = {
-        default: new Header({
-          children: [
-            new Paragraph({
-              children: [
-                new ImageRun({
-                  data: logoImage,
-                  transformation: {
-                    width: originalWidth * 2.83465,
-                    height: originalHeight * 2.83465,
-                  },
-                }),
-              ],
-              alignment: AlignmentType.LEFT,
-            }),
-          ],
-        }),
-      };
+      // Ajouter le logo dans l'en-tête
+      if (logoImage && logoPosition === 'header') {
+        const originalWidth = visualElements.logo?.original_width || 40;
+        const originalHeight = visualElements.logo?.original_height || 40;
+        
+        headerChildren.push(
+          new Paragraph({
+            children: [
+              new ImageRun({
+                data: logoImage,
+                transformation: {
+                  width: originalWidth * 2.83465,
+                  height: originalHeight * 2.83465,
+                },
+              }),
+            ],
+            alignment: AlignmentType.LEFT,
+            spacing: { after: 120 }
+          })
+        );
+      }
+      
+      // Ajouter les coordonnées commerciales dans l'en-tête
+      if (commercial && contactPosition === 'header') {
+        const contactStyle = templateStyle.element_styles?.commercial_contact || {};
+        headerChildren.push(
+          new Paragraph({
+            children: [
+              new TextRun({ 
+                text: 'Contact Commercial',
+                bold: true,
+                size: ptToHalfPt(contactStyle.size || fonts.body_size),
+                color: colorToHex(contactStyle.color || colors.text),
+                font: contactStyle.font || fonts.body_font,
+              }),
+            ],
+            spacing: { after: 120 }
+          }),
+          new Paragraph({
+            children: [
+              new TextRun({ 
+                text: `${commercial.first_name} ${commercial.last_name}`,
+                size: ptToHalfPt(contactStyle.size || fonts.body_size),
+                color: colorToHex(contactStyle.color || colors.text),
+                font: contactStyle.font || fonts.body_font,
+              }),
+            ],
+          }),
+          new Paragraph({
+            children: [
+              new TextRun({ 
+                text: commercial.email,
+                size: ptToHalfPt(contactStyle.size || fonts.body_size),
+                color: colorToHex(contactStyle.color || colors.text),
+                font: contactStyle.font || fonts.body_font,
+              }),
+            ],
+          }),
+          new Paragraph({
+            children: [
+              new TextRun({ 
+                text: commercial.phone,
+                size: ptToHalfPt(contactStyle.size || fonts.body_size),
+                color: colorToHex(contactStyle.color || colors.text),
+                font: contactStyle.font || fonts.body_font,
+              }),
+            ],
+          })
+        );
+      }
+      
+      if (headerChildren.length > 0) {
+        headers = {
+          default: new Header({
+            children: headerChildren,
+          }),
+        };
+      }
     }
 
     // Helper pour créer un paragraphe avec style de section
@@ -213,53 +275,54 @@ serve(async (req) => {
       );
     }
 
-    // Coordonnées du commercial
-    if (commercial) {
+    // Coordonnées du commercial (seulement si pas dans l'en-tête)
+    if (commercial && contactPosition === 'body') {
+      const contactStyle = templateStyle.element_styles?.commercial_contact || {};
       children.push(
         createSectionTitle('Contact Commercial'),
         createContentParagraph([
           new TextRun({ 
             text: 'Nom: ',
             bold: true,
-            size: ptToHalfPt(fonts.body_size),
-            color: colorToHex(colors.text),
-            font: fonts.body_font,
+            size: ptToHalfPt(contactStyle.size || fonts.body_size),
+            color: colorToHex(contactStyle.color || colors.text),
+            font: contactStyle.font || fonts.body_font,
           }),
           new TextRun({ 
             text: `${commercial.first_name} ${commercial.last_name}`,
-            size: ptToHalfPt(fonts.body_size),
-            color: colorToHex(colors.text),
-            font: fonts.body_font,
+            size: ptToHalfPt(contactStyle.size || fonts.body_size),
+            color: colorToHex(contactStyle.color || colors.text),
+            font: contactStyle.font || fonts.body_font,
           }),
         ]),
         createContentParagraph([
           new TextRun({ 
             text: 'Email: ',
             bold: true,
-            size: ptToHalfPt(fonts.body_size),
-            color: colorToHex(colors.text),
-            font: fonts.body_font,
+            size: ptToHalfPt(contactStyle.size || fonts.body_size),
+            color: colorToHex(contactStyle.color || colors.text),
+            font: contactStyle.font || fonts.body_font,
           }),
           new TextRun({ 
             text: commercial.email,
-            size: ptToHalfPt(fonts.body_size),
-            color: colorToHex(colors.text),
-            font: fonts.body_font,
+            size: ptToHalfPt(contactStyle.size || fonts.body_size),
+            color: colorToHex(contactStyle.color || colors.text),
+            font: contactStyle.font || fonts.body_font,
           }),
         ]),
         createContentParagraph([
           new TextRun({ 
             text: 'Téléphone: ',
             bold: true,
-            size: ptToHalfPt(fonts.body_size),
-            color: colorToHex(colors.text),
-            font: fonts.body_font,
+            size: ptToHalfPt(contactStyle.size || fonts.body_size),
+            color: colorToHex(contactStyle.color || colors.text),
+            font: contactStyle.font || fonts.body_font,
           }),
           new TextRun({ 
             text: commercial.phone,
-            size: ptToHalfPt(fonts.body_size),
-            color: colorToHex(colors.text),
-            font: fonts.body_font,
+            size: ptToHalfPt(contactStyle.size || fonts.body_size),
+            color: colorToHex(contactStyle.color || colors.text),
+            font: contactStyle.font || fonts.body_font,
           }),
         ]),
         new Paragraph({ text: '' })
@@ -267,6 +330,9 @@ serve(async (req) => {
     }
 
     // PROFIL - Trigramme + titre
+    const trigramStyle = templateStyle.element_styles?.trigram || {};
+    const titleStyle = templateStyle.element_styles?.title || {};
+    
     children.push(
       createSectionTitle('Profil'),
       createContentParagraph([
@@ -279,10 +345,10 @@ serve(async (req) => {
         }),
         new TextRun({ 
           text: trigram,
-          size: ptToHalfPt(fonts.body_size),
-          color: colorToHex(colors.primary),
-          font: fonts.body_font,
-          bold: true,
+          size: ptToHalfPt(trigramStyle.size || fonts.body_size),
+          color: colorToHex(trigramStyle.color || colors.primary),
+          font: trigramStyle.font || fonts.body_font,
+          bold: trigramStyle.bold !== false,
         }),
       ]),
       createContentParagraph([
@@ -295,9 +361,10 @@ serve(async (req) => {
         }),
         new TextRun({ 
           text: personal.title || 'N/A',
-          size: ptToHalfPt(fonts.body_size),
-          color: colorToHex(colors.text),
-          font: fonts.body_font,
+          size: ptToHalfPt(titleStyle.size || fonts.body_size),
+          color: colorToHex(titleStyle.color || colors.text),
+          font: titleStyle.font || fonts.body_font,
+          bold: titleStyle.bold || false,
         }),
       ]),
       new Paragraph({ text: '' })
@@ -375,6 +442,11 @@ serve(async (req) => {
     }
 
     // EXPÉRIENCES PROFESSIONNELLES
+    const missionTitleStyle = templateStyle.element_styles?.mission_title || {};
+    const missionContextStyle = templateStyle.element_styles?.mission_context || {};
+    const missionAchievementStyle = templateStyle.element_styles?.mission_achievement || {};
+    const missionEnvironmentStyle = templateStyle.element_styles?.mission_environment || {};
+    
     if (missions.length > 0) {
       children.push(createSectionTitle('Expériences Professionnelles'));
 
@@ -384,10 +456,10 @@ serve(async (req) => {
           createContentParagraph([
             new TextRun({ 
               text: `${mission.client || 'N/A'}`,
-              bold: true,
-              size: ptToHalfPt(fonts.body_size),
-              color: colorToHex(colors.primary),
-              font: fonts.body_font,
+              bold: missionTitleStyle.bold !== false,
+              size: ptToHalfPt(missionTitleStyle.size || fonts.body_size),
+              color: colorToHex(missionTitleStyle.color || colors.primary),
+              font: missionTitleStyle.font || fonts.body_font,
             }),
           ])
         );
@@ -397,10 +469,10 @@ serve(async (req) => {
           createContentParagraph([
             new TextRun({ 
               text: `${mission.date_start || ''} - ${mission.date_end || ''}`,
-              italics: true,
-              size: ptToHalfPt(fonts.body_size) - 2,
-              color: colorToHex(colors.secondary || colors.text),
-              font: fonts.body_font,
+              italics: missionContextStyle.italics !== false,
+              size: ptToHalfPt(missionContextStyle.size || fonts.body_size) - 2,
+              color: colorToHex(missionContextStyle.color || colors.secondary || colors.text),
+              font: missionContextStyle.font || fonts.body_font,
             }),
           ])
         );
@@ -412,15 +484,16 @@ serve(async (req) => {
               new TextRun({ 
                 text: 'Contexte: ',
                 bold: true,
-                size: ptToHalfPt(fonts.body_size),
+                size: ptToHalfPt(missionContextStyle.size || fonts.body_size),
                 color: colorToHex(colors.text),
-                font: fonts.body_font,
+                font: missionContextStyle.font || fonts.body_font,
               }),
               new TextRun({ 
                 text: mission.context,
-                size: ptToHalfPt(fonts.body_size),
-                color: colorToHex(colors.text),
-                font: fonts.body_font,
+                size: ptToHalfPt(missionContextStyle.size || fonts.body_size),
+                color: colorToHex(missionContextStyle.color || colors.text),
+                font: missionContextStyle.font || fonts.body_font,
+                italics: missionContextStyle.italics || false,
               }),
             ])
           );
@@ -433,9 +506,9 @@ serve(async (req) => {
               new TextRun({ 
                 text: 'Réalisations:',
                 bold: true,
-                size: ptToHalfPt(fonts.body_size),
+                size: ptToHalfPt(missionAchievementStyle.size || fonts.body_size),
                 color: colorToHex(colors.text),
-                font: fonts.body_font,
+                font: missionAchievementStyle.font || fonts.body_font,
               }),
             ])
           );
@@ -445,9 +518,9 @@ serve(async (req) => {
               createContentParagraph([
                 new TextRun({ 
                   text: `• ${achievement}`,
-                  size: ptToHalfPt(fonts.body_size),
-                  color: colorToHex(colors.text),
-                  font: fonts.body_font,
+                  size: ptToHalfPt(missionAchievementStyle.size || fonts.body_size),
+                  color: colorToHex(missionAchievementStyle.color || colors.text),
+                  font: missionAchievementStyle.font || fonts.body_font,
                 }),
               ], 0.3)
             );
@@ -460,16 +533,16 @@ serve(async (req) => {
             createContentParagraph([
               new TextRun({ 
                 text: 'Environnement: ',
-                bold: true,
-                size: ptToHalfPt(fonts.body_size),
-                color: colorToHex(colors.text),
-                font: fonts.body_font,
+                bold: missionEnvironmentStyle.bold !== false,
+                size: ptToHalfPt(missionEnvironmentStyle.size || fonts.body_size),
+                color: colorToHex(missionEnvironmentStyle.color || colors.text),
+                font: missionEnvironmentStyle.font || fonts.body_font,
               }),
               new TextRun({ 
                 text: mission.environment.join(', '),
-                size: ptToHalfPt(fonts.body_size),
-                color: colorToHex(colors.text),
-                font: fonts.body_font,
+                size: ptToHalfPt(missionEnvironmentStyle.size || fonts.body_size),
+                color: colorToHex(missionEnvironmentStyle.color || colors.text),
+                font: missionEnvironmentStyle.font || fonts.body_font,
               }),
             ])
           );

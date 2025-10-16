@@ -117,9 +117,17 @@ async function analyzeDocxTemplate(docxData: Blob): Promise<any> {
     const JSZip = (await import('https://esm.sh/jszip@3.10.1')).default;
     const arrayBuffer = await docxData.arrayBuffer();
     const zip = await JSZip.loadAsync(arrayBuffer);
+    const buffer = new Uint8Array(arrayBuffer);
+    
+    // Récupérer le client Supabase
+    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+    const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+    const supabase = createClient(supabaseUrl, supabaseKey);
     
     const documentXml = await zip.file('word/document.xml')?.async('text');
     const stylesXml = await zip.file('word/styles.xml')?.async('text');
+    const relsXml = await zip.file('word/_rels/document.xml.rels')?.async('text');
+    
     let headerXml: string | null = null;
     let footerXml: string | null = null;
     
@@ -144,20 +152,38 @@ async function analyzeDocxTemplate(docxData: Blob): Promise<any> {
     const stylesDoc = stylesXml ? parser.parseFromString(stylesXml, 'text/xml') : null;
     const headerDoc = headerXml ? parser.parseFromString(headerXml, 'text/xml') : null;
     const footerDoc = footerXml ? parser.parseFromString(footerXml, 'text/xml') : null;
+    const relsDoc = relsXml ? parser.parseFromString(relsXml, 'text/xml') : null;
     
-    // Analyser les images
-    const images = extractImages(doc, headerDoc);
+    // Extraire les images avec leurs relations
+    const imageRelations: { [key: string]: string } = {};
+    if (relsDoc) {
+      const relationships = relsDoc.getElementsByTagNameNS('*', 'Relationship');
+      for (let i = 0; i < relationships.length; i++) {
+        const rel = relationships[i];
+        const type = rel.getAttribute('Type');
+        const target = rel.getAttribute('Target');
+        const id = rel.getAttribute('Id');
+        
+        if (type?.includes('image') && target && id) {
+          imageRelations[id] = 'word/' + target.replace('../', '');
+        }
+      }
+    }
+    
+    // Analyser les images et extraire le logo
+    const images = await extractImagesWithData(doc, headerDoc, zip, imageRelations, supabase);
     const logoInHeader = images.length > 0 && images[0].source === 'header';
     
-    // Analyser les styles et sections
-    const analysis = analyzeDocument(doc, stylesDoc);
+    // Analyser les styles et sections avec détails
+    const analysis = analyzeDocumentDetailed(doc, stylesDoc, headerDoc);
     
     console.log('✅ DOCX analyzed:', {
       sections: analysis.sections.length,
       hasHeader: !!headerDoc,
       hasFooter: !!footerDoc,
       logoInHeader,
-      images: images.length
+      images: images.length,
+      extractedLogoPath: images[0]?.extracted_logo_path
     });
     
     return {
@@ -170,6 +196,7 @@ async function analyzeDocxTemplate(docxData: Blob): Promise<any> {
       colors: analysis.colors,
       fonts: analysis.fonts,
       sections: analysis.sections,
+      element_styles: analysis.element_styles,
       visual_elements: {
         logo: images.length > 0 ? {
           position: logoInHeader ? "header" : "body",
@@ -178,13 +205,9 @@ async function analyzeDocxTemplate(docxData: Blob): Promise<any> {
           wrapping: images[0].wrapping,
           alignment: "left",
           original_width: images[0].width,
-          original_height: images[0].height
-        } : {
-          position: "header",
-          size: "40x40mm",
-          wrapping: "square",
-          alignment: "left"
-        },
+          original_height: images[0].height,
+          extracted_logo_path: images[0].extracted_logo_path
+        } : null,
         borders: { style: "solid", width: "0.5pt", color: "#d0d0d0" },
         bullets: { style: "•", color: analysis.colors.primary, indent: "12mm" }
       },
@@ -206,37 +229,74 @@ async function analyzeDocxTemplate(docxData: Blob): Promise<any> {
   }
 }
 
-// Extraire les images du document
-function extractImages(doc: any, headerDoc: any) {
+// Extraire les images du document avec leurs données
+async function extractImagesWithData(doc: any, headerDoc: any, zip: any, imageRelations: any, supabase: any) {
   const images: any[] = [];
   
-  const processDoc = (xmlDoc: any, source: string) => {
+  const processDoc = async (xmlDoc: any, source: string) => {
     const drawings = xmlDoc.getElementsByTagNameNS('*', 'drawing');
     for (let i = 0; i < drawings.length; i++) {
-      const extent = drawings[i].getElementsByTagNameNS('*', 'extent')[0];
+      const drawing = drawings[i];
+      const extent = drawing.getElementsByTagNameNS('*', 'extent')[0];
       const width = extent ? parseInt(extent.getAttribute('cx') || '0') / 360000 : 40;
       const height = extent ? parseInt(extent.getAttribute('cy') || '0') / 360000 : 40;
-      const anchor = drawings[i].getElementsByTagNameNS('*', 'anchor')[0];
+      const anchor = drawing.getElementsByTagNameNS('*', 'anchor')[0];
       
-      images.push({
-        width,
-        height,
-        size: `${Math.round(width)}x${Math.round(height)}mm`,
-        wrapping: anchor ? 'square' : 'inline',
-        source
-      });
+      // Extraire l'ID de l'image
+      const blip = drawing.getElementsByTagNameNS('*', 'blip')[0];
+      if (blip) {
+        const embedId = blip.getAttributeNS('http://schemas.openxmlformats.org/officeDocument/2006/relationships', 'embed');
+        
+        if (embedId && imageRelations[embedId]) {
+          const imagePath = imageRelations[embedId];
+          const imageFile = zip.file(imagePath);
+          
+          if (imageFile) {
+            const imageBuffer = await imageFile.async('uint8array');
+            const ext = imagePath.split('.').pop() || 'png';
+            
+            // Sauvegarder le logo extrait
+            const logoFileName = `template-logo-${Date.now()}.${ext}`;
+            const logoBlob = new Blob([imageBuffer]);
+            
+            try {
+              const { error: logoUploadError } = await supabase.storage
+                .from('company-logos')
+                .upload(logoFileName, logoBlob, {
+                  contentType: `image/${ext}`,
+                  upsert: true
+                });
+              
+              if (!logoUploadError) {
+                console.log('✅ Logo extrait et sauvegardé:', logoFileName);
+                images.push({
+                  width,
+                  height,
+                  size: `${Math.round(width)}x${Math.round(height)}mm`,
+                  wrapping: anchor ? 'square' : 'inline',
+                  source,
+                  extracted_logo_path: logoFileName
+                });
+              }
+            } catch (err) {
+              console.error('❌ Erreur sauvegarde logo:', err);
+            }
+          }
+        }
+      }
     }
   };
   
-  processDoc(doc, 'body');
-  if (headerDoc) processDoc(headerDoc, 'header');
+  if (headerDoc) await processDoc(headerDoc, 'header');
+  await processDoc(doc, 'body');
   
   return images;
 }
 
-// Analyser le document pour extraire styles et sections
-function analyzeDocument(doc: any, stylesDoc: any) {
+// Analyser le document pour extraire styles et sections avec détails
+function analyzeDocumentDetailed(doc: any, stylesDoc: any, headerDoc: any) {
   const paragraphs = doc.getElementsByTagNameNS('*', 'p');
+  const headerParagraphs = headerDoc ? headerDoc.getElementsByTagNameNS('*', 'p') : [];
   const sections: any[] = [];
   const colors = new Set<string>();
   
@@ -246,69 +306,67 @@ function analyzeDocument(doc: any, stylesDoc: any) {
   let titleSize = '16pt';
   let primaryColor = '#2563eb';
   
-  // Analyser chaque paragraphe
+  // Styles spécifiques pour chaque élément
+  const elementStyles: any = {
+    commercial_contact: { font: 'Calibri', size: '11pt', color: '#000000', bold: false, position: 'body' },
+    trigram: { font: 'Calibri', size: '11pt', color: '#2563eb', bold: true },
+    title: { font: 'Calibri', size: '11pt', color: '#000000', bold: false },
+    section_title: { font: 'Calibri', size: '16pt', color: '#2563eb', bold: true, underline: false },
+    mission_title: { font: 'Calibri', size: '11pt', color: '#2563eb', bold: true },
+    mission_context: { font: 'Calibri', size: '11pt', color: '#64748b', bold: false, italics: true },
+    mission_achievement: { font: 'Calibri', size: '11pt', color: '#000000', bold: false },
+    mission_environment: { font: 'Calibri', size: '11pt', color: '#000000', bold: true }
+  };
+  
+  // Analyser l'en-tête pour les coordonnées commerciales
+  if (headerParagraphs.length > 0) {
+    for (let i = 0; i < headerParagraphs.length; i++) {
+      const runs = headerParagraphs[i].getElementsByTagNameNS('*', 'r');
+      if (runs.length > 0) {
+        const style = extractRunStyle(runs[0]);
+        elementStyles.commercial_contact = {
+          ...style,
+          position: 'header'
+        };
+        break;
+      }
+    }
+  }
+  
+  let inExperienceSection = false;
+  
+  // Analyser chaque paragraphe du corps
   for (let i = 0; i < paragraphs.length; i++) {
     const para = paragraphs[i];
     const text = para.textContent?.trim() || '';
-    if (!text || text.length < 3) continue;
+    if (!text || text.length < 2) continue;
     
     const runs = para.getElementsByTagNameNS('*', 'r');
     if (runs.length === 0) continue;
     
-    const rPr = runs[0].getElementsByTagNameNS('*', 'rPr')[0];
-    const pPr = para.getElementsByTagNameNS('*', 'pPr')[0];
+    const firstRunStyle = extractRunStyle(runs[0]);
+    const textUpper = text.toUpperCase();
     
-    // Extraire les styles
-    let font = bodyFont;
-    let size = bodySize;
-    let color = '#000000';
-    let bold = false;
-    let underline = false;
-    let alignment = 'left';
-    
-    if (rPr) {
-      const rFonts = rPr.getElementsByTagNameNS('*', 'rFonts')[0];
-      if (rFonts) font = rFonts.getAttribute('w:ascii') || font;
+    // Détecter les titres de sections
+    if (textUpper.includes('PROFIL') || textUpper.includes('COMPÉTENCE') || 
+        textUpper.includes('EXPÉRIENCE') || textUpper.includes('FORMATION')) {
       
-      const sz = rPr.getElementsByTagNameNS('*', 'sz')[0];
-      if (sz) size = `${parseInt(sz.getAttribute('w:val') || '22') / 2}pt`;
+      inExperienceSection = textUpper.includes('EXPÉRIENCE');
       
-      const colorNode = rPr.getElementsByTagNameNS('*', 'color')[0];
-      if (colorNode) {
-        const colorVal = colorNode.getAttribute('w:val');
-        if (colorVal && colorVal !== 'auto') {
-          color = `#${colorVal}`;
-          colors.add(color);
+      const pPr = para.getElementsByTagNameNS('*', 'pPr')[0];
+      let alignment = 'left';
+      if (pPr) {
+        const jc = pPr.getElementsByTagNameNS('*', 'jc')[0];
+        if (jc) {
+          const align = jc.getAttribute('w:val');
+          alignment = align === 'center' ? 'center' : align === 'right' ? 'right' : 'left';
         }
       }
       
-      bold = !!rPr.getElementsByTagNameNS('*', 'b')[0];
-      underline = !!rPr.getElementsByTagNameNS('*', 'u')[0];
-    }
-    
-    if (pPr) {
-      const jc = pPr.getElementsByTagNameNS('*', 'jc')[0];
-      if (jc) {
-        const align = jc.getAttribute('w:val');
-        alignment = align === 'center' ? 'center' : align === 'right' ? 'right' : 'left';
-      }
-    }
-    
-    // Détecter les titres
-    const isTitle = (bold && parseInt(size) >= 14) || text.length < 40 || text === text.toUpperCase();
-    
-    if (isTitle && text.length < 60) {
       sections.push({
-        name: text.toUpperCase(),
+        name: textUpper,
         position: alignment === 'center' ? 'top-center' : 'left-column',
-        title_style: {
-          font,
-          size,
-          color,
-          bold,
-          underline,
-          decoration: 'none'
-        },
+        title_style: firstRunStyle,
         spacing: { top: '5mm', bottom: '5mm' },
         paragraph: {
           alignment,
@@ -317,14 +375,37 @@ function analyzeDocument(doc: any, stylesDoc: any) {
         }
       });
       
-      if (sections.length === 1) {
-        titleFont = font;
-        titleSize = size;
-      }
-    } else {
-      bodyFont = font;
-      bodySize = size;
+      elementStyles.section_title = firstRunStyle;
+      titleFont = firstRunStyle.font;
+      titleSize = firstRunStyle.size;
     }
+    // Détecter le trigramme (3 lettres majuscules)
+    else if (text.match(/^[A-Z]{3}$/)) {
+      elementStyles.trigram = firstRunStyle;
+    }
+    // Détecter les titres de mission (noms d'entreprises - gras, couleur primaire)
+    else if (inExperienceSection && firstRunStyle.bold && text.length > 3 && text.length < 100) {
+      elementStyles.mission_title = firstRunStyle;
+    }
+    // Détecter les dates/contextes (italique ou tirets)
+    else if (firstRunStyle.italics || text.includes('-')) {
+      elementStyles.mission_context = firstRunStyle;
+    }
+    // Détecter les environnements techniques
+    else if (text.toLowerCase().includes('environnement') || text.toLowerCase().includes('technologie')) {
+      const nextRuns = i + 1 < paragraphs.length ? paragraphs[i + 1].getElementsByTagNameNS('*', 'r') : [];
+      if (nextRuns.length > 0) {
+        elementStyles.mission_environment = extractRunStyle(nextRuns[0]);
+      }
+    }
+    
+    // Collecter les couleurs
+    if (firstRunStyle.color && firstRunStyle.color !== '#000000' && firstRunStyle.color !== '#FFFFFF') {
+      colors.add(firstRunStyle.color);
+    }
+    
+    bodyFont = firstRunStyle.font;
+    bodySize = firstRunStyle.size;
   }
   
   // Déterminer la couleur primaire
@@ -354,8 +435,48 @@ function analyzeDocument(doc: any, stylesDoc: any) {
       background: '#ffffff',
       accent: primaryColor,
       borders: '#e2e8f0'
-    }
+    },
+    element_styles: elementStyles
   };
+}
+
+// Fonction utilitaire pour extraire le style d'un run
+function extractRunStyle(run: any) {
+  const rPr = run.getElementsByTagNameNS('*', 'rPr')[0];
+  const style: any = {
+    font: 'Calibri',
+    size: '11pt',
+    color: '#000000',
+    bold: false,
+    italics: false,
+    underline: false
+  };
+  
+  if (rPr) {
+    const rFonts = rPr.getElementsByTagNameNS('*', 'rFonts')[0];
+    if (rFonts) {
+      style.font = rFonts.getAttribute('w:ascii') || 'Calibri';
+    }
+    
+    const sz = rPr.getElementsByTagNameNS('*', 'sz')[0];
+    if (sz) {
+      style.size = `${parseInt(sz.getAttribute('w:val') || '22') / 2}pt`;
+    }
+    
+    const colorNode = rPr.getElementsByTagNameNS('*', 'color')[0];
+    if (colorNode) {
+      const colorVal = colorNode.getAttribute('w:val');
+      if (colorVal && colorVal !== 'auto') {
+        style.color = `#${colorVal}`;
+      }
+    }
+    
+    style.bold = !!rPr.getElementsByTagNameNS('*', 'b')[0];
+    style.italics = !!rPr.getElementsByTagNameNS('*', 'i')[0];
+    style.underline = !!rPr.getElementsByTagNameNS('*', 'u')[0];
+  }
+  
+  return style;
 }
 
 // Analyse PDF basique
