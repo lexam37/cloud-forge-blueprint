@@ -120,13 +120,16 @@ serve(async (req) => {
     // Créer le contenu du document
     const children = [];
     const trigram = personal.trigram || 'XXX';
+    const title = personal.title || '';
     
     // Créer l'en-tête si le logo ou les coordonnées commerciales doivent y être
     let headers = undefined;
     const logoPosition = visualElements.logo?.position || 'body';
-    const contactPosition = templateStyle.element_styles?.commercial_contact?.position || 'body';
     
-    if (logoImage && logoPosition === 'header' || contactPosition === 'header') {
+    // Si le template contient des coordonnées commercial dans l'en-tête, on les récupère du template
+    const hasCommercialInHeader = templateStyle.element_styles?.commercial_contact?.position === 'header';
+    
+    if (logoImage && logoPosition === 'header' || hasCommercialInHeader) {
       const headerChildren = [];
       
       // Ajouter le logo dans l'en-tête
@@ -152,7 +155,7 @@ serve(async (req) => {
       }
       
       // Ajouter les coordonnées commerciales dans l'en-tête
-      if (commercial && contactPosition === 'header') {
+      if (commercial && hasCommercialInHeader) {
         const contactStyle = templateStyle.element_styles?.commercial_contact || {};
         headerChildren.push(
           new Paragraph({
@@ -276,7 +279,7 @@ serve(async (req) => {
     }
 
     // Coordonnées du commercial (seulement si pas dans l'en-tête)
-    if (commercial && contactPosition === 'body') {
+    if (commercial && !hasCommercialInHeader) {
       const contactStyle = templateStyle.element_styles?.commercial_contact || {};
       children.push(
         createSectionTitle('Contact Commercial'),
@@ -329,44 +332,37 @@ serve(async (req) => {
       );
     }
 
-    // PROFIL - Trigramme + titre
+    // Trigramme + titre (pas de section PROFIL)
     const trigramStyle = templateStyle.element_styles?.trigram || {};
-    const titleStyle = templateStyle.element_styles?.title || {};
+    const titleStyleElement = templateStyle.element_styles?.title || {};
     
     children.push(
-      createSectionTitle('Profil'),
-      createContentParagraph([
-        new TextRun({ 
-          text: 'Trigramme: ',
-          bold: true,
-          size: ptToHalfPt(fonts.body_size),
-          color: colorToHex(colors.text),
-          font: fonts.body_font,
-        }),
-        new TextRun({ 
-          text: trigram,
-          size: ptToHalfPt(trigramStyle.size || fonts.body_size),
-          color: colorToHex(trigramStyle.color || colors.primary),
-          font: trigramStyle.font || fonts.body_font,
-          bold: trigramStyle.bold !== false,
-        }),
-      ]),
-      createContentParagraph([
-        new TextRun({ 
-          text: 'Titre: ',
-          bold: true,
-          size: ptToHalfPt(fonts.body_size),
-          color: colorToHex(colors.text),
-          font: fonts.body_font,
-        }),
-        new TextRun({ 
-          text: personal.title || 'N/A',
-          size: ptToHalfPt(titleStyle.size || fonts.body_size),
-          color: colorToHex(titleStyle.color || colors.text),
-          font: titleStyle.font || fonts.body_font,
-          bold: titleStyle.bold || false,
-        }),
-      ]),
+      new Paragraph({
+        children: [
+          new TextRun({ 
+            text: trigram,
+            bold: trigramStyle.bold !== false,
+            size: ptToHalfPt(trigramStyle.size || fonts.body_size),
+            color: colorToHex(trigramStyle.color || colors.primary),
+            font: trigramStyle.font || fonts.body_font,
+          }),
+        ],
+        spacing: { after: 120 },
+        alignment: AlignmentType.CENTER
+      }),
+      new Paragraph({
+        children: [
+          new TextRun({ 
+            text: personal.title || '',
+            bold: titleStyleElement.bold || false,
+            size: ptToHalfPt(titleStyleElement.size || fonts.body_size),
+            color: colorToHex(titleStyleElement.color || colors.text),
+            font: titleStyleElement.font || fonts.body_font,
+          }),
+        ],
+        spacing: { after: 240 },
+        alignment: AlignmentType.CENTER
+      }),
       new Paragraph({ text: '' })
     );
 
@@ -633,8 +629,9 @@ serve(async (req) => {
       type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' 
     });
 
-    // Nom du fichier généré
-    const fileName = `${trigram} DC.docx`;
+    // Nom du fichier généré - inclure le titre/poste
+    const titlePart = title ? ` ${title}` : '';
+    const fileName = `${trigram} DC${titlePart}.docx`;
     const filePath = `generated-${Date.now()}-${fileName}`;
 
     // Upload vers Supabase Storage

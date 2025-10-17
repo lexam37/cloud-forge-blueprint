@@ -477,21 +477,42 @@ function extractRunStyle(run: any) {
   };
   
   if (rPr) {
+    // Extraire la police - essayer différents attributs
     const rFonts = rPr.getElementsByTagNameNS('*', 'rFonts')[0];
     if (rFonts) {
-      style.font = rFonts.getAttribute('w:ascii') || 'Calibri';
+      // Essayer d'abord ascii, puis eastAsia, puis cs (complex script)
+      const fontName = rFonts.getAttributeNS('http://schemas.openxmlformats.org/wordprocessingml/2006/main', 'ascii') ||
+                       rFonts.getAttribute('w:ascii') ||
+                       rFonts.getAttributeNS('http://schemas.openxmlformats.org/wordprocessingml/2006/main', 'eastAsia') ||
+                       rFonts.getAttribute('w:eastAsia') ||
+                       rFonts.getAttributeNS('http://schemas.openxmlformats.org/wordprocessingml/2006/main', 'cs') ||
+                       rFonts.getAttribute('w:cs') ||
+                       rFonts.getAttribute('ascii') ||
+                       'Calibri';
+      style.font = fontName;
+      console.log(`📝 Font extracted: ${fontName}`);
     }
     
+    // Extraire la taille
     const sz = rPr.getElementsByTagNameNS('*', 'sz')[0];
     if (sz) {
-      style.size = `${parseInt(sz.getAttribute('w:val') || '22') / 2}pt`;
+      const sizeVal = sz.getAttributeNS('http://schemas.openxmlformats.org/wordprocessingml/2006/main', 'val') ||
+                      sz.getAttribute('w:val') ||
+                      sz.getAttribute('val') ||
+                      '22';
+      style.size = `${parseInt(sizeVal) / 2}pt`;
+      console.log(`📏 Size extracted: ${style.size}`);
     }
     
+    // Extraire la couleur
     const colorNode = rPr.getElementsByTagNameNS('*', 'color')[0];
     if (colorNode) {
-      const colorVal = colorNode.getAttribute('w:val');
-      if (colorVal && colorVal !== 'auto') {
+      const colorVal = colorNode.getAttributeNS('http://schemas.openxmlformats.org/wordprocessingml/2006/main', 'val') ||
+                       colorNode.getAttribute('w:val') ||
+                       colorNode.getAttribute('val');
+      if (colorVal && colorVal !== 'auto' && colorVal !== '000000') {
         style.color = `#${colorVal}`;
+        console.log(`🎨 Color extracted: ${style.color}`);
       }
     }
     
