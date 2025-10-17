@@ -315,7 +315,11 @@ function analyzeDocumentDetailed(doc: any, stylesDoc: any, headerDoc: any) {
     mission_title: { font: 'Calibri', size: '11pt', color: '#2563eb', bold: true },
     mission_context: { font: 'Calibri', size: '11pt', color: '#64748b', bold: false, italics: true },
     mission_achievement: { font: 'Calibri', size: '11pt', color: '#000000', bold: false },
-    mission_environment: { font: 'Calibri', size: '11pt', color: '#000000', bold: true }
+    mission_environment: { font: 'Calibri', size: '11pt', color: '#000000', bold: true },
+    skills_label: { font: 'Calibri', size: '11pt', color: '#000000', bold: true },
+    skills_item: { font: 'Calibri', size: '11pt', color: '#000000', bold: false },
+    education_degree: { font: 'Calibri', size: '11pt', color: '#000000', bold: true },
+    education_info: { font: 'Calibri', size: '11pt', color: '#64748b', bold: false, italics: true }
   };
   
   // Analyser l'en-tête pour les coordonnées commerciales
@@ -334,6 +338,8 @@ function analyzeDocumentDetailed(doc: any, stylesDoc: any, headerDoc: any) {
   }
   
   let inExperienceSection = false;
+  let inSkillsSection = false;
+  let inEducationSection = false;
   
   // Analyser chaque paragraphe du corps
   for (let i = 0; i < paragraphs.length; i++) {
@@ -352,6 +358,8 @@ function analyzeDocumentDetailed(doc: any, stylesDoc: any, headerDoc: any) {
         textUpper.includes('EXPÉRIENCE') || textUpper.includes('FORMATION')) {
       
       inExperienceSection = textUpper.includes('EXPÉRIENCE');
+      inSkillsSection = textUpper.includes('COMPÉTENCE');
+      inEducationSection = textUpper.includes('FORMATION');
       
       const pPr = para.getElementsByTagNameNS('*', 'pPr')[0];
       let alignment = 'left';
@@ -396,6 +404,22 @@ function analyzeDocumentDetailed(doc: any, stylesDoc: any, headerDoc: any) {
       const nextRuns = i + 1 < paragraphs.length ? paragraphs[i + 1].getElementsByTagNameNS('*', 'r') : [];
       if (nextRuns.length > 0) {
         elementStyles.mission_environment = extractRunStyle(nextRuns[0]);
+      }
+    }
+    // Détecter les éléments de la section compétences
+    else if (inSkillsSection) {
+      if (firstRunStyle.bold || text.toLowerCase().includes('technique') || text.toLowerCase().includes('outils') || text.toLowerCase().includes('langues')) {
+        elementStyles.skills_label = firstRunStyle;
+      } else if (text.startsWith('•') || text.startsWith('-')) {
+        elementStyles.skills_item = firstRunStyle;
+      }
+    }
+    // Détecter les éléments de la section formation
+    else if (inEducationSection) {
+      if (firstRunStyle.bold && !text.includes('-')) {
+        elementStyles.education_degree = firstRunStyle;
+      } else if (firstRunStyle.italics || text.includes('-')) {
+        elementStyles.education_info = firstRunStyle;
       }
     }
     

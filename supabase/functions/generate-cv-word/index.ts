@@ -371,6 +371,9 @@ serve(async (req) => {
     );
 
     // COMPÉTENCES
+    const skillsLabelStyle = templateStyle.element_styles?.skills_label || {};
+    const skillsItemStyle = templateStyle.element_styles?.skills_item || {};
+    
     if (skills.technical?.length > 0 || skills.tools?.length > 0 || skills.languages?.length > 0) {
       children.push(createSectionTitle('Compétences'));
 
@@ -379,19 +382,20 @@ serve(async (req) => {
           createContentParagraph([
             new TextRun({ 
               text: 'Techniques: ',
-              bold: true,
-              size: ptToHalfPt(fonts.body_size),
-              color: colorToHex(colors.text),
-              font: fonts.body_font,
+              bold: skillsLabelStyle.bold !== false,
+              size: ptToHalfPt(skillsLabelStyle.size || fonts.body_size),
+              color: colorToHex(skillsLabelStyle.color || colors.text),
+              font: skillsLabelStyle.font || fonts.body_font,
             }),
           ]),
           ...skills.technical.map((skill: string) => 
             createContentParagraph([
               new TextRun({ 
                 text: `• ${skill}`,
-                size: ptToHalfPt(fonts.body_size),
-                color: colorToHex(colors.text),
-                font: fonts.body_font,
+                size: ptToHalfPt(skillsItemStyle.size || fonts.body_size),
+                color: colorToHex(skillsItemStyle.color || colors.text),
+                font: skillsItemStyle.font || fonts.body_font,
+                bold: skillsItemStyle.bold || false,
               }),
             ], 0.3)
           )
@@ -403,16 +407,17 @@ serve(async (req) => {
           createContentParagraph([
             new TextRun({ 
               text: 'Outils: ',
-              bold: true,
-              size: ptToHalfPt(fonts.body_size),
-              color: colorToHex(colors.text),
-              font: fonts.body_font,
+              bold: skillsLabelStyle.bold !== false,
+              size: ptToHalfPt(skillsLabelStyle.size || fonts.body_size),
+              color: colorToHex(skillsLabelStyle.color || colors.text),
+              font: skillsLabelStyle.font || fonts.body_font,
             }),
             new TextRun({ 
               text: skills.tools.join(', '),
-              size: ptToHalfPt(fonts.body_size),
-              color: colorToHex(colors.text),
-              font: fonts.body_font,
+              size: ptToHalfPt(skillsItemStyle.size || fonts.body_size),
+              color: colorToHex(skillsItemStyle.color || colors.text),
+              font: skillsItemStyle.font || fonts.body_font,
+              bold: skillsItemStyle.bold || false,
             }),
           ])
         );
@@ -423,16 +428,17 @@ serve(async (req) => {
           createContentParagraph([
             new TextRun({ 
               text: 'Langues: ',
-              bold: true,
-              size: ptToHalfPt(fonts.body_size),
-              color: colorToHex(colors.text),
-              font: fonts.body_font,
+              bold: skillsLabelStyle.bold !== false,
+              size: ptToHalfPt(skillsLabelStyle.size || fonts.body_size),
+              color: colorToHex(skillsLabelStyle.color || colors.text),
+              font: skillsLabelStyle.font || fonts.body_font,
             }),
             new TextRun({ 
               text: skills.languages.join(', '),
-              size: ptToHalfPt(fonts.body_size),
-              color: colorToHex(colors.text),
-              font: fonts.body_font,
+              size: ptToHalfPt(skillsItemStyle.size || fonts.body_size),
+              color: colorToHex(skillsItemStyle.color || colors.text),
+              font: skillsItemStyle.font || fonts.body_font,
+              bold: skillsItemStyle.bold || false,
             }),
           ])
         );
@@ -553,6 +559,9 @@ serve(async (req) => {
     }
 
     // FORMATION
+    const educationDegreeStyle = templateStyle.element_styles?.education_degree || {};
+    const educationInfoStyle = templateStyle.element_styles?.education_info || {};
+    
     if (education.length > 0) {
       children.push(createSectionTitle('Formation'));
 
@@ -561,19 +570,20 @@ serve(async (req) => {
           createContentParagraph([
             new TextRun({ 
               text: edu.degree || 'N/A',
-              bold: true,
-              size: ptToHalfPt(fonts.body_size),
-              color: colorToHex(colors.text),
-              font: fonts.body_font,
+              bold: educationDegreeStyle.bold !== false,
+              size: ptToHalfPt(educationDegreeStyle.size || fonts.body_size),
+              color: colorToHex(educationDegreeStyle.color || colors.text),
+              font: educationDegreeStyle.font || fonts.body_font,
             }),
           ]),
           createContentParagraph([
             new TextRun({ 
               text: `${edu.institution || ''} - ${edu.year || ''}`,
-              italics: true,
-              size: ptToHalfPt(fonts.body_size) - 2,
-              color: colorToHex(colors.secondary || colors.text),
-              font: fonts.body_font,
+              italics: educationInfoStyle.italics !== false,
+              size: ptToHalfPt(educationInfoStyle.size || fonts.body_size),
+              color: colorToHex(educationInfoStyle.color || colors.secondary || colors.text),
+              font: educationInfoStyle.font || fonts.body_font,
+              bold: educationInfoStyle.bold || false,
             }),
           ])
         );
@@ -583,9 +593,10 @@ serve(async (req) => {
             createContentParagraph([
               new TextRun({ 
                 text: `Spécialité: ${edu.field}`,
-                size: ptToHalfPt(fonts.body_size),
-                color: colorToHex(colors.text),
-                font: fonts.body_font,
+                size: ptToHalfPt(educationInfoStyle.size || fonts.body_size),
+                color: colorToHex(educationInfoStyle.color || colors.text),
+                font: educationInfoStyle.font || fonts.body_font,
+                bold: educationInfoStyle.bold || false,
               }),
             ])
           );
