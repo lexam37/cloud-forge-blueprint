@@ -477,29 +477,44 @@ function extractRunStyle(run: any) {
   };
   
   if (rPr) {
-    // Extraire la police - essayer différents attributs
+    // Extraire la police - essayer tous les attributs possibles
     const rFonts = rPr.getElementsByTagNameNS('*', 'rFonts')[0];
     if (rFonts) {
-      // Essayer d'abord ascii, puis eastAsia, puis cs (complex script)
-      const fontName = rFonts.getAttributeNS('http://schemas.openxmlformats.org/wordprocessingml/2006/main', 'ascii') ||
-                       rFonts.getAttribute('w:ascii') ||
-                       rFonts.getAttributeNS('http://schemas.openxmlformats.org/wordprocessingml/2006/main', 'eastAsia') ||
-                       rFonts.getAttribute('w:eastAsia') ||
-                       rFonts.getAttributeNS('http://schemas.openxmlformats.org/wordprocessingml/2006/main', 'cs') ||
-                       rFonts.getAttribute('w:cs') ||
-                       rFonts.getAttribute('ascii') ||
-                       'Calibri';
+      // Récupérer tous les attributs du nœud
+      const attributes = rFonts.attributes;
+      let fontName = 'Calibri';
+      
+      // Parcourir tous les attributs pour trouver le nom de police
+      for (let i = 0; i < attributes.length; i++) {
+        const attr = attributes[i];
+        const attrName = attr.name.toLowerCase();
+        
+        // Chercher les attributs qui contiennent 'ascii', 'eastasia', 'hAnsi', etc.
+        if (attrName.includes('ascii') || attrName.includes('hansi') || attrName.includes('cs')) {
+          fontName = attr.value;
+          console.log(`📝 Font extracted from attribute ${attr.name}: ${fontName}`);
+          break;
+        }
+      }
+      
       style.font = fontName;
-      console.log(`📝 Font extracted: ${fontName}`);
     }
     
     // Extraire la taille
     const sz = rPr.getElementsByTagNameNS('*', 'sz')[0];
     if (sz) {
-      const sizeVal = sz.getAttributeNS('http://schemas.openxmlformats.org/wordprocessingml/2006/main', 'val') ||
-                      sz.getAttribute('w:val') ||
-                      sz.getAttribute('val') ||
-                      '22';
+      // Parcourir tous les attributs pour trouver la valeur
+      const attributes = sz.attributes;
+      let sizeVal = '22';
+      
+      for (let i = 0; i < attributes.length; i++) {
+        const attr = attributes[i];
+        if (attr.name.toLowerCase().includes('val')) {
+          sizeVal = attr.value;
+          break;
+        }
+      }
+      
       style.size = `${parseInt(sizeVal) / 2}pt`;
       console.log(`📏 Size extracted: ${style.size}`);
     }
@@ -507,9 +522,18 @@ function extractRunStyle(run: any) {
     // Extraire la couleur
     const colorNode = rPr.getElementsByTagNameNS('*', 'color')[0];
     if (colorNode) {
-      const colorVal = colorNode.getAttributeNS('http://schemas.openxmlformats.org/wordprocessingml/2006/main', 'val') ||
-                       colorNode.getAttribute('w:val') ||
-                       colorNode.getAttribute('val');
+      // Parcourir tous les attributs pour trouver la valeur de couleur
+      const attributes = colorNode.attributes;
+      let colorVal = null;
+      
+      for (let i = 0; i < attributes.length; i++) {
+        const attr = attributes[i];
+        if (attr.name.toLowerCase().includes('val')) {
+          colorVal = attr.value;
+          break;
+        }
+      }
+      
       if (colorVal && colorVal !== 'auto' && colorVal !== '000000') {
         style.color = `#${colorVal}`;
         console.log(`🎨 Color extracted: ${style.color}`);
