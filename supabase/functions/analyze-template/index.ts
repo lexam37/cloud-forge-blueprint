@@ -477,27 +477,36 @@ function extractRunStyle(run: any) {
   };
   
   if (rPr) {
-    // Extraire la police - essayer tous les attributs possibles
+    // Extraire la police
     const rFonts = rPr.getElementsByTagNameNS('*', 'rFonts')[0];
+    console.log('🔎 rPr found, searching for rFonts...');
+    
     if (rFonts) {
-      // Récupérer tous les attributs du nœud
-      const attributes = rFonts.attributes;
-      let fontName = 'Calibri';
+      console.log('🔎 rFonts element found, attributes:', rFonts.attributes.length);
       
-      // Parcourir tous les attributs pour trouver le nom de police
+      // Récupérer tous les attributs du nœud et les logger
+      const attributes = rFonts.attributes;
+      let fontName = null;
+      
+      // Parcourir tous les attributs
       for (let i = 0; i < attributes.length; i++) {
         const attr = attributes[i];
-        const attrName = attr.name.toLowerCase();
+        console.log(`  Attribute ${i}: ${attr.name} = ${attr.value}`);
         
-        // Chercher les attributs qui contiennent 'ascii', 'eastasia', 'hAnsi', etc.
-        if (attrName.includes('ascii') || attrName.includes('hansi') || attrName.includes('cs')) {
-          fontName = attr.value;
-          console.log(`📝 Font extracted from attribute ${attr.name}: ${fontName}`);
-          break;
+        // Prendre le premier nom de police non-vide
+        if (!fontName && attr.value && attr.value.trim() !== '') {
+          fontName = attr.value.trim();
         }
       }
       
-      style.font = fontName;
+      if (fontName) {
+        style.font = fontName;
+        console.log(`✅ Font extracted: ${fontName}`);
+      } else {
+        console.log('⚠️ No font found in attributes, using default');
+      }
+    } else {
+      console.log('⚠️ No rFonts element found');
     }
     
     // Extraire la taille
