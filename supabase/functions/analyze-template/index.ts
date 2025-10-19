@@ -148,11 +148,11 @@ async function analyzeDocxTemplate(docxData: Blob): Promise<any> {
     if (!documentXml) throw new Error('document.xml not found');
     
     const parser = new DOMParser();
-    const doc = parser.parseFromString(documentXml, 'text/xml');
-    const stylesDoc = stylesXml ? parser.parseFromString(stylesXml, 'text/xml') : null;
-    const headerDoc = headerXml ? parser.parseFromString(headerXml, 'text/xml') : null;
-    const footerDoc = footerXml ? parser.parseFromString(footerXml, 'text/xml') : null;
-    const relsDoc = relsXml ? parser.parseFromString(relsXml, 'text/xml') : null;
+    const doc = parser.parseFromString(documentXml, 'text/html');
+    const stylesDoc = stylesXml ? parser.parseFromString(stylesXml, 'text/html') : null;
+    const headerDoc = headerXml ? parser.parseFromString(headerXml, 'text/html') : null;
+    const footerDoc = footerXml ? parser.parseFromString(footerXml, 'text/html') : null;
+    const relsDoc = relsXml ? parser.parseFromString(relsXml, 'text/html') : null;
     
     // Extraire les images avec leurs relations
     const imageRelations: { [key: string]: string } = {};
