@@ -179,8 +179,8 @@ Retourne un JSON avec cette structure EXACTE :
   "missions": [
     {
       "client": "nom client",
-      "date_start": "YYYY-MM",
-      "date_end": "YYYY-MM ou 'Présent'",
+      "date_start": "MM-YYYY",
+      "date_end": "MM-YYYY ou 'Actuellement'",
       "role": "poste occupé",
       "context": "contexte de la mission",
       "achievements": ["réalisation1", "réalisation2"],
