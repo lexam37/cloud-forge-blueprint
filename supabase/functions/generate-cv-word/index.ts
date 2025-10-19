@@ -372,6 +372,10 @@ serve(async (req) => {
     
     if (skills.technical?.length > 0 || skills.tools?.length > 0 || skills.languages?.length > 0) {
       children.push(createSectionTitle('Compétences'));
+      
+      // Récupérer le style des puces
+      const bulletStyle = visualElements.bullets || {};
+      const bulletChar = bulletStyle.character || '•';
 
       if (skills.technical?.length > 0) {
         children.push(
@@ -387,10 +391,10 @@ serve(async (req) => {
           ...skills.technical.map((skill: string) => 
             createContentParagraph([
               new TextRun({ 
-                text: `• ${skill}`,
-                size: ptToHalfPt(skillsItemStyle.size || fonts.body_size),
-                color: colorToHex(skillsItemStyle.color || colors.text),
-                font: skillsItemStyle.font || fonts.body_font,
+                text: `${bulletChar} ${skill}`,
+                size: ptToHalfPt(skillsItemStyle.size || bulletStyle.size || fonts.body_size),
+                color: colorToHex(skillsItemStyle.color || bulletStyle.color || colors.text),
+                font: skillsItemStyle.font || bulletStyle.font || fonts.body_font,
                 bold: skillsItemStyle.bold || false,
               }),
             ], 0.3)

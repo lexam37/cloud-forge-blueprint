@@ -209,7 +209,13 @@ async function analyzeDocxTemplate(docxData: Blob): Promise<any> {
           extracted_logo_path: images[0].extracted_logo_path
         } : null,
         borders: { style: "solid", width: "0.5pt", color: "#d0d0d0" },
-        bullets: { style: "•", color: analysis.colors.primary, indent: "12mm" }
+        bullets: analysis.element_styles?.bullet_style || { 
+          character: "•", 
+          color: analysis.colors.primary, 
+          indent: "12mm",
+          font: analysis.fonts.body_font,
+          size: analysis.fonts.body_size
+        }
       },
       spacing: {
         section_spacing: "12pt",
@@ -306,7 +312,9 @@ function analyzeDocumentDetailed(doc: any, stylesDoc: any, headerDoc: any) {
   let titleSize = '16pt';
   let primaryColor = '#2563eb';
   
-  // Styles spécifiques pour chaque élément
+  // Styles spécifiques pour chaque élément avec logs
+  console.log('🎨 Starting detailed style extraction...');
+  
   const elementStyles: any = {
     commercial_contact: { font: 'Calibri', size: '11pt', color: '#000000', bold: false, position: 'body' },
     trigram: { font: 'Calibri', size: '11pt', color: '#2563eb', bold: true },
@@ -319,11 +327,13 @@ function analyzeDocumentDetailed(doc: any, stylesDoc: any, headerDoc: any) {
     skills_label: { font: 'Calibri', size: '11pt', color: '#000000', bold: true },
     skills_item: { font: 'Calibri', size: '11pt', color: '#000000', bold: false },
     education_degree: { font: 'Calibri', size: '11pt', color: '#000000', bold: true },
-    education_info: { font: 'Calibri', size: '11pt', color: '#64748b', bold: false, italics: true }
+    education_info: { font: 'Calibri', size: '11pt', color: '#64748b', bold: false, italics: true },
+    bullet_style: { character: '•', font: 'Calibri', size: '11pt', color: '#2563eb', indent: '12mm' }
   };
   
   // Analyser l'en-tête pour les coordonnées commerciales
   if (headerParagraphs.length > 0) {
+    console.log('📋 Analyzing header paragraphs...');
     for (let i = 0; i < headerParagraphs.length; i++) {
       const runs = headerParagraphs[i].getElementsByTagNameNS('*', 'r');
       if (runs.length > 0) {
@@ -332,6 +342,7 @@ function analyzeDocumentDetailed(doc: any, stylesDoc: any, headerDoc: any) {
           ...style,
           position: 'header'
         };
+        console.log('✅ Commercial contact style extracted from header:', style);
         break;
       }
     }
@@ -342,6 +353,7 @@ function analyzeDocumentDetailed(doc: any, stylesDoc: any, headerDoc: any) {
   let inEducationSection = false;
   
   // Analyser chaque paragraphe du corps
+  console.log('📄 Analyzing document paragraphs...');
   for (let i = 0; i < paragraphs.length; i++) {
     const para = paragraphs[i];
     const text = para.textContent?.trim() || '';
@@ -353,9 +365,22 @@ function analyzeDocumentDetailed(doc: any, stylesDoc: any, headerDoc: any) {
     const firstRunStyle = extractRunStyle(runs[0]);
     const textUpper = text.toUpperCase();
     
+    // Détecter les puces
+    if (text.startsWith('•') || text.startsWith('-') || text.startsWith('○')) {
+      const bulletChar = text[0];
+      elementStyles.bullet_style = {
+        character: bulletChar,
+        ...firstRunStyle,
+        indent: '12mm'
+      };
+      console.log('🔘 Bullet style detected:', bulletChar, firstRunStyle);
+    }
+    
     // Détecter les titres de sections
     if (textUpper.includes('PROFIL') || textUpper.includes('COMPÉTENCE') || 
         textUpper.includes('EXPÉRIENCE') || textUpper.includes('FORMATION')) {
+      
+      console.log(`📌 Section detected: ${textUpper}`);
       
       inExperienceSection = textUpper.includes('EXPÉRIENCE');
       inSkillsSection = textUpper.includes('COMPÉTENCE');
@@ -386,46 +411,57 @@ function analyzeDocumentDetailed(doc: any, stylesDoc: any, headerDoc: any) {
       elementStyles.section_title = firstRunStyle;
       titleFont = firstRunStyle.font;
       titleSize = firstRunStyle.size;
+      
+      console.log(`✅ Section title style: font=${firstRunStyle.font}, size=${firstRunStyle.size}, color=${firstRunStyle.color}`);
     }
     // Détecter le trigramme (3 lettres majuscules)
     else if (text.match(/^[A-Z]{3}$/)) {
       elementStyles.trigram = firstRunStyle;
+      console.log('🔤 Trigram style:', firstRunStyle);
     }
     // Détecter les titres de mission (noms d'entreprises - gras, couleur primaire)
     else if (inExperienceSection && firstRunStyle.bold && text.length > 3 && text.length < 100) {
       elementStyles.mission_title = firstRunStyle;
+      console.log('🏢 Mission title style:', firstRunStyle);
     }
     // Détecter les dates/contextes (italique ou tirets)
     else if (firstRunStyle.italics || text.includes('-')) {
       elementStyles.mission_context = firstRunStyle;
+      console.log('📅 Mission context style:', firstRunStyle);
     }
     // Détecter les environnements techniques
     else if (text.toLowerCase().includes('environnement') || text.toLowerCase().includes('technologie')) {
       const nextRuns = i + 1 < paragraphs.length ? paragraphs[i + 1].getElementsByTagNameNS('*', 'r') : [];
       if (nextRuns.length > 0) {
         elementStyles.mission_environment = extractRunStyle(nextRuns[0]);
+        console.log('💻 Mission environment style:', elementStyles.mission_environment);
       }
     }
     // Détecter les éléments de la section compétences
     else if (inSkillsSection) {
       if (firstRunStyle.bold || text.toLowerCase().includes('technique') || text.toLowerCase().includes('outils') || text.toLowerCase().includes('langues')) {
         elementStyles.skills_label = firstRunStyle;
+        console.log('🏷️ Skills label style:', firstRunStyle);
       } else if (text.startsWith('•') || text.startsWith('-')) {
         elementStyles.skills_item = firstRunStyle;
+        console.log('📝 Skills item style:', firstRunStyle);
       }
     }
     // Détecter les éléments de la section formation
     else if (inEducationSection) {
       if (firstRunStyle.bold && !text.includes('-')) {
         elementStyles.education_degree = firstRunStyle;
+        console.log('🎓 Education degree style:', firstRunStyle);
       } else if (firstRunStyle.italics || text.includes('-')) {
         elementStyles.education_info = firstRunStyle;
+        console.log('🏫 Education info style:', firstRunStyle);
       }
     }
     
     // Collecter les couleurs
     if (firstRunStyle.color && firstRunStyle.color !== '#000000' && firstRunStyle.color !== '#FFFFFF') {
       colors.add(firstRunStyle.color);
+      console.log('🎨 Color collected:', firstRunStyle.color);
     }
     
     bodyFont = firstRunStyle.font;
@@ -435,6 +471,13 @@ function analyzeDocumentDetailed(doc: any, stylesDoc: any, headerDoc: any) {
   // Déterminer la couleur primaire
   const colorArray = Array.from(colors);
   primaryColor = colorArray.find(c => c !== '#000000' && c !== '#FFFFFF') || '#2563eb';
+  
+  console.log('✅ Style extraction complete!');
+  console.log(`  Body font: ${bodyFont} / ${bodySize}`);
+  console.log(`  Title font: ${titleFont} / ${titleSize}`);
+  console.log(`  Primary color: ${primaryColor}`);
+  console.log(`  Colors found: ${colorArray.join(', ')}`);
+  console.log(`  Sections found: ${sections.length}`);
   
   return {
     sections: sections.length > 0 ? sections : [{
