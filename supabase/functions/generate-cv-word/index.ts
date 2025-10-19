@@ -96,7 +96,7 @@ serve(async (req) => {
     
     // Télécharger le logo - priorité au logo extrait du template
     let logoImage = null;
-    const logoSettings = visualElements.logo || { position: "body", size: "40x40mm" };
+    const logoSettings = visualElements.logo || {};
     
     // Essayer d'abord le logo extrait du template
     const logoPath = template?.structure_data?.visual_elements?.logo?.extracted_logo_path || commercial?.logo_path;
@@ -110,10 +110,10 @@ serve(async (req) => {
         if (logoData) {
           const logoBuffer = await logoData.arrayBuffer();
           logoImage = new Uint8Array(logoBuffer);
-          console.log('Logo chargé depuis:', logoPath);
+          console.log('✅ Logo loaded:', logoPath);
         }
       } catch (err) {
-        console.log('Could not load logo:', err);
+        console.log('❌ Could not load logo:', err);
       }
     }
 
@@ -124,18 +124,31 @@ serve(async (req) => {
     
     // Créer l'en-tête si le logo ou les coordonnées commerciales doivent y être
     let headers = undefined;
-    const logoPosition = visualElements.logo?.position || 'body';
+    const logoPosition = logoSettings?.position || 'body';
     
     // Si le template contient des coordonnées commercial dans l'en-tête, on les récupère du template
     const hasCommercialInHeader = templateStyle.element_styles?.commercial_contact?.position === 'header';
     
-    if (logoImage && logoPosition === 'header' || hasCommercialInHeader) {
+    if ((logoImage && logoPosition === 'header') || hasCommercialInHeader) {
       const headerChildren = [];
       
-      // Ajouter le logo dans l'en-tête
+      // Ajouter le logo dans l'en-tête avec dimensions EXACTES du template
       if (logoImage && logoPosition === 'header') {
-        const originalWidth = visualElements.logo?.original_width || 40;
-        const originalHeight = visualElements.logo?.original_height || 40;
+        // Utiliser les dimensions en EMUs du template (dimensions exactes)
+        const widthEmu = logoSettings.width_emu || 914400; // Default 1 inch
+        const heightEmu = logoSettings.height_emu || 914400;
+        
+        // Convertir EMUs en points (914400 EMUs = 1 inch = 72 points)
+        const widthPoints = (widthEmu / 914400) * 72;
+        const heightPoints = (heightEmu / 914400) * 72;
+        
+        console.log(`📐 Logo dimensions: ${widthPoints.toFixed(1)}x${heightPoints.toFixed(1)} points (${logoSettings.width_mm?.toFixed(1)}x${logoSettings.height_mm?.toFixed(1)}mm)`);
+        console.log(`   Wrapping: ${logoSettings.wrapping}, Alignment: ${logoSettings.alignment}`);
+        
+        // Déterminer l'alignement (typage explicite)
+        let alignment: any = AlignmentType.LEFT;
+        if (logoSettings.alignment === 'center') alignment = AlignmentType.CENTER;
+        if (logoSettings.alignment === 'right') alignment = AlignmentType.RIGHT;
         
         headerChildren.push(
           new Paragraph({
@@ -143,12 +156,12 @@ serve(async (req) => {
               new ImageRun({
                 data: logoImage,
                 transformation: {
-                  width: originalWidth * 2.83465,
-                  height: originalHeight * 2.83465,
+                  width: widthPoints,
+                  height: heightPoints,
                 },
               }),
             ],
-            alignment: AlignmentType.LEFT,
+            alignment: alignment,
             spacing: { after: 120 }
           })
         );
