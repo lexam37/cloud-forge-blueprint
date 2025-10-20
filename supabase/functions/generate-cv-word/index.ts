@@ -34,7 +34,8 @@ serve(async (req) => {
     }
 
     const extractedData = cvDoc.extracted_data || {};
-    const templateStyle = cvDoc.cv_templates?.structure_data || {};
+    const templates = cvDoc.cv_templates as any;
+    const templateStyle = (Array.isArray(templates) ? templates[0]?.structure_data : templates?.structure_data) || {};
     const colors = templateStyle.colors || { primary: "#0000FF", text: "#000000", secondary: "#000000" }; // Bleu par défaut
     const fonts = templateStyle.fonts || { title_font: "Arial", body_font: "Arial", title_size: "14pt", body_size: "11pt", title_weight: "bold", line_height: "1.15" };
     const spacing = templateStyle.spacing || { section_spacing: "12pt", element_spacing: "6pt", padding: "10mm", line_spacing: "1.15" };
@@ -177,7 +178,7 @@ serve(async (req) => {
                 new TextRun({
                   text: `${subcategory.name}: `,
                   bold: subcategoryStyle.bold !== false,
-                  italic: subcategoryStyle.italic || false,
+                  italics: subcategoryStyle.italic || false,
                   size: ptToHalfPt(subcategoryStyle.size || fonts.body_size),
                   color: colorToHex(subcategoryStyle.color || colors.text),
                   font: subcategoryStyle.font || fonts.body_font,
@@ -201,7 +202,7 @@ serve(async (req) => {
                 new TextRun({
                   text: 'Langues: ',
                   bold: elementStyles.skills_label?.bold !== false,
-                  italic: elementStyles.skills_label?.italic || false,
+                  italics: elementStyles.skills_label?.italic || false,
                   size: ptToHalfPt(elementStyles.skills_label?.size || fonts.body_size),
                   color: colorToHex(elementStyles.skills_label?.color || colors.text),
                   font: elementStyles.skills_label?.font || fonts.body_font,
@@ -225,7 +226,7 @@ serve(async (req) => {
                 new TextRun({
                   text: 'Certifications: ',
                   bold: elementStyles.skills_label?.bold !== false,
-                  italic: elementStyles.skills_label?.italic || false,
+                  italics: elementStyles.skills_label?.italic || false,
                   size: ptToHalfPt(elementStyles.skills_label?.size || fonts.body_size),
                   color: colorToHex(elementStyles.skills_label?.color || colors.text),
                   font: elementStyles.skills_label?.font || fonts.body_font,
@@ -271,7 +272,7 @@ serve(async (req) => {
                   }),
                   new TextRun({
                     text: mission.context,
-                    italic: elementStyles.mission_context?.italic !== false,
+                    italics: elementStyles.mission_context?.italic !== false,
                     size: ptToHalfPt(elementStyles.mission_context?.size || fonts.body_size),
                     color: colorToHex(elementStyles.mission_context?.color || colors.text),
                     font: elementStyles.mission_context?.font || fonts.body_font,

@@ -1,6 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { JSZip } from "https://esm.sh/jszip@3.10.1";
+import JSZip from "https://esm.sh/jszip@3.10.1";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -81,9 +81,10 @@ serve(async (req) => {
 
         const paragraphs = Array.from(documentXml.matchAll(/<w:p[^>]*>(.*?)<\/w:p>/gs));
         for (const para of paragraphs) {
-          const paraContent = para[1];
+          const match = para as RegExpMatchArray;
+          const paraContent = match[1];
           const textMatches = Array.from(paraContent.matchAll(/<w:t[^>]*>([^<]+)<\/w:t>/g));
-          let text = textMatches.map(m => m[1]).join('').trim();
+          let text = textMatches.map((m: RegExpMatchArray) => m[1]).join('').trim();
           if (!text) continue;
 
           // Nettoyage rigoureux des caractères parasites
