@@ -334,7 +334,7 @@ async function analyzeDocxTemplate(docxData: Blob, supabase: any): Promise<any> 
       const runMatch = paraContent.match(/<w:r[^>]*>(.*?)<\/w:r>/s);
       if (!runMatch) continue;
       
-      const style = extractStyle(runContent);
+      const style = extractStyle(runMatch[1]);
       const paragraph = extractParagraph(paraContent);
       
       if (style.color !== '#000000') allColors.add(style.color);
