@@ -70,37 +70,63 @@ serve(async (req) => {
 
         let currentSubcategory = '';
         let skillItems: string[] = [];
+        let currentSection = '';
+
         paragraphs.forEach((p: any) => {
           const text = p.textContent.trim().replace(/^[•\-\*É°\u2022\u25CF]\s*/g, '');
           if (!text) return;
 
           const styleAttr = p.getAttribute('style') || '';
           const style = {
-            font: styleAttr.match(/font-family:([^;]+)/)?.[1]?.trim() || 'Arial',
+            font: styleAttr.match(/font-family:([^;]+)/)?.[1]?.trim() || 'Segoe UI Symbol',
             size: styleAttr.match(/font-size:([^;]+)/)?.[1]?.trim() || '11pt',
             color: styleAttr.match(/color:(#[0-9a-fA-F]{6})/)?.[1] || '#000000',
             bold: styleAttr.includes('font-weight:bold'),
             italic: styleAttr.includes('font-style:italic'),
-            bullet: p.querySelector('li') || text.match(/^[•\-\*É°\u2022\u25CF]/) ? true : false
+            bullet: p.querySelector('li') || text.match(/^[•\-\*É°\u2022\u25CF]/) ? true : false,
+            indent: styleAttr.match(/padding-left:([^;]+)/)?.[1]?.trim() || '0pt'
           };
 
-          if (style.bullet && currentSubcategory) {
-            skillItems.push(text);
-          } else if (skillSubcategories.some(sc => text.toLowerCase().includes(sc.toLowerCase()))) {
-            if (skillItems.length > 0) {
-              structuredData.push({
-                text: `${currentSubcategory}: ${skillItems.join(', ')}`,
-                style: { ...style, bullet: false }
-              });
-              skillItems = [];
+          const textLower = text.toLowerCase();
+          let isSection = false;
+          for (const [sectionKey, keywords] of Object.entries(sectionKeywords)) {
+            if (keywords.some(keyword => textLower.includes(keyword))) {
+              currentSection = sectionKey;
+              isSection = true;
+              break;
             }
-            currentSubcategory = text;
-            structuredData.push({ text, style });
+          }
+
+          if (currentSection === 'Compétences' && !isSection) {
+            const textParts = text.split(/[\t:]/).map(t => t.trim());
+            if (skillSubcategories.some(sc => textLower.includes(sc.toLowerCase()))) {
+              if (skillItems.length > 0) {
+                structuredData.push({
+                  text: `${currentSubcategory}: ${skillItems.join(', ')}`,
+                  style: { ...style, bold: false, bullet: false }
+                });
+                skillItems = [];
+              }
+              currentSubcategory = textParts[0];
+              structuredData.push({ text: currentSubcategory, style: { ...style, bold: false } });
+            } else if (style.bullet || textParts.length > 1) {
+              skillItems.push(textParts.length > 1 ? textParts[1] : text);
+            } else {
+              if (skillItems.length > 0) {
+                structuredData.push({
+                  text: `${currentSubcategory}: ${skillItems.join(', ')}`,
+                  style: { ...style, bold: false, bullet: false }
+                });
+                skillItems = [];
+                currentSubcategory = '';
+              }
+              structuredData.push({ text, style });
+            }
           } else {
             if (skillItems.length > 0) {
               structuredData.push({
                 text: `${currentSubcategory}: ${skillItems.join(', ')}`,
-                style: { ...style, bullet: false }
+                style: { ...style, bold: false, bullet: false }
               });
               skillItems = [];
               currentSubcategory = '';
@@ -112,7 +138,7 @@ serve(async (req) => {
         if (skillItems.length > 0) {
           structuredData.push({
             text: `${currentSubcategory}: ${skillItems.join(', ')}`,
-            style: { bullet: false }
+            style: { bold: false, bullet: false }
           });
         }
 
@@ -122,7 +148,7 @@ serve(async (req) => {
         extractedText = data.text.replace(/^[•\-\*É°\u2022\u25CF]\s*/gm, '').replace(/\s+/g, ' ').trim();
         structuredData = extractedText.split('\n').map(line => ({
           text: line.trim(),
-          style: { font: 'Unknown', size: 'Unknown', color: '#000000', bold: false, italic: false, bullet: false, case: 'mixed' }
+          style: { font: 'Unknown', size: 'Unknown', color: '#000000', bold: false, italic: false, bullet: false, indent: '0pt' }
         }));
       } else {
         throw new Error(`Unsupported file type: ${fileType}`);
@@ -152,7 +178,7 @@ serve(async (req) => {
    - Compétences : ${sectionSynonyms['Compétences'].join(', ')}
    - Expérience : ${sectionSynonyms['Expérience'].join(', ')}
    - Formations & Certifications : ${sectionSynonyms['Formations & Certifications'].join(', ')}
-4. Pour les compétences, regrouper les items par sous-catégories (${skillSubcategories.join(', ')}) dans UNE SEULE CHAÎNE séparée par des virgules (ex. : "Langage/BDD: Spark, Hive, Hadoop"). Supprimer tout caractère parasite (É, •, etc.).
+4. Pour les compétences, regrouper les items par sous-catégories (${skillSubcategories.join(', ')}) dans UNE SEULE CHAÎNE séparée par des virgules (ex. : "Langage/BDD: Spark, Hive, Hadoop"). Supprimer tout caractère parasite (É, •, etc.). Ne pas ajouter "Techniques" sauf si explicite dans le CV.
 5. Conserver la casse exacte des titres de section (${sectionNames.join(', ')}).
 6. Inclure un placeholder pour les coordonnées commerciales si dans l'en-tête.
 
