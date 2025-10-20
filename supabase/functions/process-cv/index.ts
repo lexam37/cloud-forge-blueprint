@@ -29,7 +29,6 @@ serve(async (req) => {
 
     console.log('Processing CV:', cvDocumentId);
 
-    // Récupérer le document CV et le template associé
     const { data: cvDoc, error: cvError } = await supabase
       .from('cv_documents')
       .select('*, cv_templates(structure_data)')
@@ -61,7 +60,6 @@ serve(async (req) => {
       .download(cvDoc.original_file_path);
 
     if (cvFileError || !cvFileData) {
-      console.error('Error downloading CV file:', cvFileError);
       throw new Error('Failed to download CV file');
     }
 
@@ -76,7 +74,6 @@ serve(async (req) => {
       const bytes = new Uint8Array(arrayBuffer);
 
       if (fileType === 'docx' || fileType === 'doc') {
-        // Extraire texte et styles pour DOCX
         const zip = await JSZip.loadAsync(arrayBuffer);
         const documentXml = await zip.file('word/document.xml')?.async('text');
         
@@ -86,21 +83,24 @@ serve(async (req) => {
         for (const para of paragraphs) {
           const paraContent = para[1];
           const textMatches = Array.from(paraContent.matchAll(/<w:t[^>]*>([^<]+)<\/w:t>/g));
-          const text = textMatches.map(m => m[1]).join('').trim();
+          let text = textMatches.map(m => m[1]).join('').trim();
           if (!text) continue;
 
-          const runMatch = paraContent.match(/<w:r[^>]*>(.*?)<\/w:r>/s);
-          if (!runMatch) continue;
+          // Supprimer les caractères de puce parasites (ex. : É)
+          text = text.replace(/^[\•\-\*É]\s*/, '');
 
+          const runMatch = paraContent.match(/<w:r[^>]*>(.*?)<\/w:r>/s);
           const style: any = {};
-          const fontMatch = runMatch[1].match(/<w:rFonts[^>]+w:ascii="([^"]+)"/);
-          if (fontMatch) style.font = fontMatch[1];
-          const sizeMatch = runMatch[1].match(/<w:sz[^>]+w:val="(\d+)"/);
-          if (sizeMatch) style.size = `${parseInt(sizeMatch[1]) / 2}pt`;
-          const colorMatch = runMatch[1].match(/<w:color[^>]+w:val="([^"]+)"/);
-          if (colorMatch && colorMatch[1] !== 'auto') style.color = `#${colorMatch[1]}`;
-          style.bold = /<w:b[\/\s>]/.test(runMatch[1]);
-          style.italic = /<w:i[\/\s>]/.test(runMatch[1]);
+          if (runMatch) {
+            const fontMatch = runMatch[1].match(/<w:rFonts[^>]+w:ascii="([^"]+)"/);
+            if (fontMatch) style.font = fontMatch[1];
+            const sizeMatch = runMatch[1].match(/<w:sz[^>]+w:val="(\d+)"/);
+            if (sizeMatch) style.size = `${parseInt(sizeMatch[1]) / 2}pt`;
+            const colorMatch = runMatch[1].match(/<w:color[^>]+w:val="([^"]+)"/);
+            if (colorMatch && colorMatch[1] !== 'auto') style.color = `#${colorMatch[1]}`;
+            style.bold = /<w:b[\/\s>]/.test(runMatch[1]);
+            style.italic = /<w:i[\/\s>]/.test(runMatch[1]);
+          }
           style.bullet = paraContent.match(/<w:numPr>/) ? true : false;
 
           structuredData.push({ text, style });
@@ -109,7 +109,7 @@ serve(async (req) => {
       } else if (fileType === 'pdf') {
         const pdfParse = await import('https://esm.sh/pdf-parse@1.1.1');
         const data = await pdfParse.default(bytes);
-        extractedText = data.text;
+        extractedText = data.text.replace(/^[\•\-\*É]\s*/gm, '');
         structuredData = extractedText.split('\n').map(line => ({
           text: line.trim(),
           style: { font: 'Unknown', size: 'Unknown', color: '#000000', bold: false, italic: false, bullet: false }
@@ -128,8 +128,10 @@ serve(async (req) => {
 
     console.log('Text extracted, analyzing with AI...');
 
-    // Prompt amélioré pour inclure les noms de section du template
-    const sectionNames = templateStructure.sections?.map((s: any) => s.name) || ['Compétences', 'Expériences', 'Formations & Certifications'];
+    const sectionNames = templateStructure.sections?.map((s: any) => s.name) || ['Compétences', 'Expérience', 'Formations & Certifications'];
+    const skillSubcategories = templateStructure.element_styles?.skill_subcategories?.map((sc: any) => sc.name) || [];
+    const hasCommercialContact = templateStructure.element_styles?.commercial_contact?.position === 'header';
+
     const systemPrompt = `Tu es un expert en extraction et anonymisation de CV. Analyse ce CV et extrais TOUTES les informations en les ANONYMISANT, en respectant la structure du template suivant : ${JSON.stringify(sectionNames)}.
 
 ÉTAPES D'ANONYMISATION CRITIQUES :
@@ -137,8 +139,10 @@ serve(async (req) => {
    Exemple : Jean DUPONT → JDT
 2. SUPPRIMER toutes informations personnelles : nom complet, prénom, email, téléphone, adresse, photos, QR codes, liens personnels (LinkedIn, GitHub, etc.)
 3. Identifier les sections en utilisant les noms EXACTS du template : ${sectionNames.join(', ')}
-4. Extraire les sous-catégories de compétences si présentes (ex. : Langage/BDD, OS)
-5. Extraire les projets, compétences, formations et missions professionnelles
+4. Extraire les sous-catégories de compétences (${skillSubcategories.join(', ') || 'aucune'}) avec leurs items séparés par des virgules
+5. Inclure un placeholder pour les coordonnées commerciales si présentes dans l'en-tête du template
+6. Supprimer tout caractère parasite comme 'É' devant les compétences
+7. Extraire les projets, compétences, formations et missions professionnelles
 
 Retourne un JSON avec cette structure EXACTE :
 {
@@ -153,6 +157,10 @@ Retourne un JSON avec cette structure EXACTE :
     "address_found": "adresse extraite (à ne pas inclure)",
     "linkedin_found": "lien LinkedIn extrait (à ne pas inclure)",
     "personal_links_found": ["liens personnels extraits (à ne pas inclure)"]
+  },
+  "commercial_contact": {
+    "text": "texte placeholder pour l'en-tête (ex: 'Contact Commercial')",
+    "enabled": boolean
   },
   "key_projects": [
     {
@@ -231,6 +239,12 @@ Retourne un JSON avec cette structure EXACTE :
       console.error('Error parsing AI response:', parseError);
       throw new Error('Failed to parse AI extraction result');
     }
+
+    // Ajouter un placeholder pour coordonnées commerciales si nécessaire
+    extractedData.commercial_contact = {
+      text: hasCommercialContact ? 'Contact Commercial' : '',
+      enabled: hasCommercialContact
+    };
 
     await supabase.from('processing_logs').insert({
       cv_document_id: cvDocumentId,
