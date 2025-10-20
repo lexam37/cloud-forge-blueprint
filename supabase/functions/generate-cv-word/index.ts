@@ -1,6 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.75.0";
-import { Document, Packer, Paragraph, TextRun, AlignmentType, ImageRun, UnderlineType, convertInchesToTwip, convertMillimetersToTwip, BorderStyle, Header } from "https://esm.sh/docx@8.5.0";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -23,9 +22,10 @@ serve(async (req) => {
     const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     const supabase = createClient(supabaseUrl, supabaseKey);
 
+    // Récupérer les données du CV
     const { data: cvDoc, error: cvError } = await supabase
       .from('cv_documents')
-      .select('extracted_data, cv_templates(structure_data)')
+      .select('*')
       .eq('id', cvDocumentId)
       .single();
 
@@ -33,26 +33,82 @@ serve(async (req) => {
       throw new Error('CV document not found');
     }
 
+    // Récupérer le template actif
+    const { data: template, error: templateError } = await supabase
+      .from('cv_templates')
+      .select('*')
+      .eq('is_active', true)
+      .limit(1)
+      .maybeSingle();
+
+    console.log('CV data:', cvDoc.extracted_data);
+    console.log('Template:', template);
+
+    // Importer la bibliothèque docx pour générer le document
+    const { 
+      Document, Packer, Paragraph, TextRun, HeadingLevel, 
+      AlignmentType, ImageRun, UnderlineType, 
+      convertInchesToTwip, convertMillimetersToTwip,
+      BorderStyle, Header
+    } = await import('https://esm.sh/docx@8.5.0');
+
     const extractedData = cvDoc.extracted_data || {};
-    const templateStyle = cvDoc.cv_templates?.structure_data || {};
-    const colors = templateStyle.colors || { primary: "#000000", text: "#000000", secondary: "#000000" };
-    const fonts = templateStyle.fonts || { title_font: "Arial", body_font: "Arial", title_size: "14pt", body_size: "11pt", title_weight: "bold", line_height: "1.15" };
-    const spacing = templateStyle.spacing || { section_spacing: "12pt", element_spacing: "6pt", padding: "10mm", line_spacing: "1.15" };
+    const personal = extractedData.personal || {};
+    const missions = extractedData.missions || [];
+    const skills = extractedData.skills || {};
+    const education = extractedData.education || [];
+
+    // Récupérer le style détaillé du template
+    const templateStyle = template?.structure_data || {};
+    const colors = templateStyle.colors || { primary: "#2563eb", text: "#1e293b", secondary: "#64748b" };
+    const fonts = templateStyle.fonts || { 
+      title_font: "Calibri", 
+      body_font: "Calibri", 
+      title_size: "16pt", 
+      body_size: "11pt",
+      title_weight: "bold",
+      line_height: "1.15"
+    };
+    const spacing = templateStyle.spacing || {
+      section_spacing: "12pt",
+      element_spacing: "6pt",
+      padding: "10mm",
+      line_spacing: "1.15"
+    };
     const sections = templateStyle.sections || [];
     const visualElements = templateStyle.visual_elements || {};
-    const elementStyles = templateStyle.element_styles || {};
-
-    const ptToHalfPt = (pt: string) => parseInt(pt.replace('pt', '')) * 2;
+    const pageSettings = templateStyle.page || {};
+    
+    // Récupérer les informations du commercial depuis le template
+    const commercialContactStyle = templateStyle.element_styles?.commercial_contact || {};
+    const commercialData = {
+      first_name: commercialContactStyle.first_name || '',
+      last_name: commercialContactStyle.last_name || '',
+      email: commercialContactStyle.email || '',
+      phone: commercialContactStyle.phone || ''
+    };
+    
+    // Helpers pour convertir les valeurs
+    const ptToHalfPt = (pt: string) => parseInt(pt) * 2;
     const colorToHex = (color: string) => color.replace('#', '');
-    const mmToTwip = (mm: string) => convertMillimetersToTwip(parseInt(mm.replace('mm', '')));
-
+    const mmToTwip = (mm: string) => convertMillimetersToTwip(parseInt(mm));
+    
+    // Télécharger le logo - priorité au logo extrait du template
     let logoImage = null;
-    const logoPath = visualElements.logo?.extracted_logo_path;
+    const logoSettings = visualElements.logo || {};
+    
+    // Utiliser uniquement le logo extrait du template
+    const logoPath = template?.structure_data?.visual_elements?.logo?.extracted_logo_path;
+    
     if (logoPath) {
       try {
-        const { data: logoData } = await supabase.storage.from('company-logos').download(logoPath);
+        const { data: logoData } = await supabase.storage
+          .from('company-logos')
+          .download(logoPath);
+        
         if (logoData) {
-          logoImage = new Uint8Array(await logoData.arrayBuffer());
+          const logoBuffer = await logoData.arrayBuffer();
+          logoImage = new Uint8Array(logoBuffer);
           console.log('✅ Logo loaded:', logoPath);
         }
       } catch (err) {
@@ -60,339 +116,542 @@ serve(async (req) => {
       }
     }
 
+    // Créer le contenu du document
     const children = [];
-    const headers = [];
-
-    // Coordonnées commerciales dans l'en-tête
-    if (extractedData.commercial_contact?.enabled) {
-      const contactStyle = elementStyles.commercial_contact || {};
-      headers.push(
-        new Paragraph({
-          children: [
-            new TextRun({
-              text: extractedData.commercial_contact.text || 'Contact Commercial',
-              bold: contactStyle.bold !== false,
-              size: ptToHalfPt(contactStyle.size || fonts.body_size),
-              color: colorToHex(contactStyle.color || colors.text),
-              font: contactStyle.font || fonts.body_font,
-            }),
-          ],
-          alignment: contactStyle.paragraph?.alignment === 'center' ? AlignmentType.CENTER : AlignmentType.RIGHT,
-          spacing: { after: 120 }
-        })
-      );
+    const trigram = personal.trigram || 'XXX';
+    const title = personal.title || '';
+    
+    // Créer l'en-tête si le logo ou les coordonnées commerciales doivent y être
+    let headers = undefined;
+    const logoPosition = logoSettings?.position || 'body';
+    
+    // Si le template contient des coordonnées commercial dans l'en-tête, on les récupère du template
+    const hasCommercialInHeader = templateStyle.element_styles?.commercial_contact?.position === 'header';
+    
+    if ((logoImage && logoPosition === 'header') || hasCommercialInHeader) {
+      const headerChildren = [];
+      
+      // Ajouter le logo dans l'en-tête avec dimensions EXACTES du template
+      if (logoImage && logoPosition === 'header') {
+        // Utiliser les dimensions en EMUs du template (dimensions exactes)
+        const widthEmu = logoSettings.width_emu || 914400; // Default 1 inch
+        const heightEmu = logoSettings.height_emu || 914400;
+        
+        // Convertir EMUs en points (914400 EMUs = 1 inch = 72 points)
+        const widthPoints = (widthEmu / 914400) * 72;
+        const heightPoints = (heightEmu / 914400) * 72;
+        
+        console.log(`📐 Logo dimensions: ${widthPoints.toFixed(1)}x${heightPoints.toFixed(1)} points (${logoSettings.width_mm?.toFixed(1)}x${logoSettings.height_mm?.toFixed(1)}mm)`);
+        console.log(`   Wrapping: ${logoSettings.wrapping}, Alignment: ${logoSettings.alignment}`);
+        
+        // Déterminer l'alignement (typage explicite)
+        let alignment: any = AlignmentType.LEFT;
+        if (logoSettings.alignment === 'center') alignment = AlignmentType.CENTER;
+        if (logoSettings.alignment === 'right') alignment = AlignmentType.RIGHT;
+        
+        headerChildren.push(
+          new Paragraph({
+            children: [
+              new ImageRun({
+                data: logoImage,
+                transformation: {
+                  width: widthPoints,
+                  height: heightPoints,
+                },
+              }),
+            ],
+            alignment: alignment,
+            spacing: { after: 120 }
+          })
+        );
+      }
+      
+      // Ajouter les coordonnées commerciales dans l'en-tête si elles existent et si la position est 'header'
+      if (commercialData.email && commercialData.phone && hasCommercialInHeader) {
+        const contactStyle = templateStyle.element_styles?.commercial_contact || {};
+        headerChildren.push(
+          new Paragraph({
+            children: [
+              new TextRun({ 
+                text: 'Contact Commercial',
+                bold: contactStyle.bold !== false,
+                size: ptToHalfPt(contactStyle.size || fonts.body_size),
+                color: colorToHex(contactStyle.color || colors.text),
+                font: contactStyle.font || fonts.body_font,
+              }),
+            ],
+            spacing: { after: 120 }
+          }),
+          new Paragraph({
+            children: [
+              new TextRun({ 
+                text: `${commercialData.first_name} ${commercialData.last_name}`,
+                bold: contactStyle.bold || false,
+                size: ptToHalfPt(contactStyle.size || fonts.body_size),
+                color: colorToHex(contactStyle.color || colors.text),
+                font: contactStyle.font || fonts.body_font,
+              }),
+            ],
+          }),
+          new Paragraph({
+            children: [
+              new TextRun({ 
+                text: commercialData.email,
+                size: ptToHalfPt(contactStyle.size || fonts.body_size),
+                color: colorToHex(contactStyle.color || colors.text),
+                font: contactStyle.font || fonts.body_font,
+              }),
+            ],
+          }),
+          new Paragraph({
+            children: [
+              new TextRun({ 
+                text: commercialData.phone,
+                size: ptToHalfPt(contactStyle.size || fonts.body_size),
+                color: colorToHex(contactStyle.color || colors.text),
+                font: contactStyle.font || fonts.body_font,
+              }),
+            ],
+          })
+        );
+      }
+      
+      if (headerChildren.length > 0) {
+        headers = {
+          default: new Header({
+            children: headerChildren,
+          }),
+        };
+      }
     }
 
-    // Logo dans l'en-tête
-    if (logoImage && visualElements.logo?.position === 'header') {
-      const widthPoints = (visualElements.logo.width_emu / 914400) * 72;
-      const heightPoints = (visualElements.logo.height_emu / 914400) * 72;
-      const alignment = visualElements.logo.alignment === 'center' ? AlignmentType.CENTER : visualElements.logo.alignment === 'right' ? AlignmentType.RIGHT : AlignmentType.LEFT;
+    // Helper pour créer un paragraphe avec style de section
+    function createSectionTitle(sectionName: string) {
+      const sectionStyle = sections.find((s: any) => 
+        s.name.toLowerCase().includes(sectionName.toLowerCase())
+      ) || sections[0];
+      
+      const titleStyle = sectionStyle?.title_style || {};
+      const sectionSpacing = sectionStyle?.spacing || { top: "5mm", bottom: "5mm" };
+      const paragraph = sectionStyle?.paragraph || { alignment: "left" };
+      
+      return new Paragraph({
+        children: [
+          new TextRun({ 
+            text: sectionName.toUpperCase(),
+            bold: titleStyle.bold !== false,
+            size: ptToHalfPt(titleStyle.size || fonts.title_size),
+            color: colorToHex(titleStyle.color || colors.primary),
+            font: titleStyle.font || fonts.title_font,
+            underline: titleStyle.underline ? { type: UnderlineType.SINGLE } : undefined,
+          }),
+        ],
+        alignment: paragraph.alignment === "center" ? AlignmentType.CENTER : AlignmentType.LEFT,
+        spacing: {
+          before: mmToTwip(sectionSpacing.top || "5mm"),
+          after: mmToTwip(sectionSpacing.bottom || "5mm"),
+        }
+      });
+    }
 
-      headers.push(
+    // Helper pour créer un paragraphe de contenu
+    function createContentParagraph(textRuns: any[], indent = 0) {
+      return new Paragraph({
+        children: textRuns,
+        spacing: {
+          before: parseInt(spacing.element_spacing) * 20 || 120,
+          after: parseInt(spacing.element_spacing) * 20 || 120,
+          line: parseInt(fonts.line_height || "1.15") * 240,
+        },
+        indent: indent > 0 ? { left: convertInchesToTwip(indent) } : undefined,
+      });
+    }
+
+    // Logo dans le corps si pas dans l'en-tête
+    if (logoImage && logoPosition !== 'header') {
+      const logoSize = visualElements.logo?.size || "40x40mm";
+      const [width, height] = logoSize.split('x').map((s: string) => parseInt(s));
+      const originalWidth = visualElements.logo?.original_width || width;
+      const originalHeight = visualElements.logo?.original_height || height;
+      
+      children.push(
         new Paragraph({
           children: [
             new ImageRun({
               data: logoImage,
-              transformation: { width: widthPoints, height: heightPoints },
+              transformation: {
+                width: originalWidth * 2.83465,
+                height: originalHeight * 2.83465,
+              },
             }),
           ],
-          alignment,
-          spacing: { after: 120 }
+          alignment: AlignmentType.LEFT,
+          spacing: { after: 240 }
         })
       );
     }
 
-    // Trigramme et titre
-    const trigram = extractedData.personal?.trigram || 'XXX';
-    const title = extractedData.personal?.title || '';
+    // Coordonnées du commercial (seulement si pas dans l'en-tête et si elles existent)
+    if (commercialData.email && commercialData.phone && !hasCommercialInHeader) {
+      const contactStyle = templateStyle.element_styles?.commercial_contact || {};
+      children.push(
+        createSectionTitle('Contact Commercial'),
+        createContentParagraph([
+          new TextRun({ 
+            text: 'Nom: ',
+            bold: true,
+            size: ptToHalfPt(contactStyle.size || fonts.body_size),
+            color: colorToHex(contactStyle.color || colors.text),
+            font: contactStyle.font || fonts.body_font,
+          }),
+          new TextRun({ 
+            text: `${commercialData.first_name} ${commercialData.last_name}`,
+            size: ptToHalfPt(contactStyle.size || fonts.body_size),
+            color: colorToHex(contactStyle.color || colors.text),
+            font: contactStyle.font || fonts.body_font,
+          }),
+        ]),
+        createContentParagraph([
+          new TextRun({ 
+            text: 'Email: ',
+            bold: true,
+            size: ptToHalfPt(contactStyle.size || fonts.body_size),
+            color: colorToHex(contactStyle.color || colors.text),
+            font: contactStyle.font || fonts.body_font,
+          }),
+          new TextRun({ 
+            text: commercialData.email,
+            size: ptToHalfPt(contactStyle.size || fonts.body_size),
+            color: colorToHex(contactStyle.color || colors.text),
+            font: contactStyle.font || fonts.body_font,
+          }),
+        ]),
+        createContentParagraph([
+          new TextRun({ 
+            text: 'Téléphone: ',
+            bold: true,
+            size: ptToHalfPt(contactStyle.size || fonts.body_size),
+            color: colorToHex(contactStyle.color || colors.text),
+            font: contactStyle.font || fonts.body_font,
+          }),
+          new TextRun({ 
+            text: commercialData.phone,
+            size: ptToHalfPt(contactStyle.size || fonts.body_size),
+            color: colorToHex(contactStyle.color || colors.text),
+            font: contactStyle.font || fonts.body_font,
+          }),
+        ]),
+        new Paragraph({ text: '' })
+      );
+    }
+
+    // Trigramme + titre (pas de section PROFIL)
+    const trigramStyle = templateStyle.element_styles?.trigram || {};
+    const titleStyleElement = templateStyle.element_styles?.title || {};
+    
     children.push(
       new Paragraph({
         children: [
           new TextRun({ 
             text: trigram,
-            bold: elementStyles.trigram?.bold !== false,
-            size: ptToHalfPt(elementStyles.trigram?.size || fonts.body_size),
-            color: colorToHex(elementStyles.trigram?.color || colors.primary),
-            font: elementStyles.trigram?.font || fonts.body_font,
+            bold: trigramStyle.bold !== false,
+            size: ptToHalfPt(trigramStyle.size || fonts.body_size),
+            color: colorToHex(trigramStyle.color || colors.primary),
+            font: trigramStyle.font || fonts.body_font,
           }),
         ],
-        spacing: { after: ptToHalfPt(spacing.element_spacing) },
-        alignment: elementStyles.trigram?.paragraph?.alignment === 'center' ? AlignmentType.CENTER : AlignmentType.LEFT
+        spacing: { after: 120 },
+        alignment: AlignmentType.CENTER
       }),
       new Paragraph({
         children: [
           new TextRun({ 
-            text: title,
-            bold: elementStyles.title?.bold !== false,
-            size: ptToHalfPt(elementStyles.title?.size || fonts.body_size),
-            color: colorToHex(elementStyles.title?.color || colors.text),
-            font: elementStyles.title?.font || fonts.body_font,
+            text: personal.title || '',
+            bold: titleStyleElement.bold || false,
+            size: ptToHalfPt(titleStyleElement.size || fonts.body_size),
+            color: colorToHex(titleStyleElement.color || colors.text),
+            font: titleStyleElement.font || fonts.body_font,
           }),
         ],
-        spacing: { after: ptToHalfPt(spacing.section_spacing) },
-        alignment: elementStyles.title?.paragraph?.alignment === 'center' ? AlignmentType.CENTER : AlignmentType.LEFT
+        spacing: { after: 240 },
+        alignment: AlignmentType.CENTER
       }),
       new Paragraph({ text: '' })
     );
 
-    // Sections dynamiques
-    for (const section of sections) {
-      const sectionName = section.name;
-      const sectionStyle = section.title_style || {};
-      const sectionData = sectionName.toLowerCase().includes('compétence') ? extractedData.skills :
-                         sectionName.toLowerCase().includes('expérience') ? extractedData.missions :
-                         sectionName.toLowerCase().includes('formation') ? extractedData.education : [];
+    // COMPÉTENCES
+    const skillsLabelStyle = templateStyle.element_styles?.skills_label || {};
+    const skillsItemStyle = templateStyle.element_styles?.skills_item || {};
+    
+    if (skills.technical?.length > 0 || skills.tools?.length > 0 || skills.languages?.length > 0) {
+      children.push(createSectionTitle('Compétences'));
+      
+      // Récupérer le style des puces
+      const bulletStyle = visualElements.bullets || {};
+      const bulletChar = bulletStyle.character || '•';
 
-      // Respecter la casse exacte du template
-      const formattedSectionName = sectionStyle.case === 'uppercase' ? sectionName.toUpperCase() :
-                                  sectionStyle.case === 'lowercase' ? sectionName.toLowerCase() : sectionName;
-
-      children.push(
-        new Paragraph({
-          children: [
+      if (skills.technical?.length > 0) {
+        children.push(
+          createContentParagraph([
             new TextRun({ 
-              text: formattedSectionName,
-              bold: sectionStyle.bold !== false,
-              size: ptToHalfPt(sectionStyle.size || fonts.title_size),
-              color: colorToHex(sectionStyle.color || colors.primary),
-              font: sectionStyle.font || fonts.title_font,
-              underline: sectionStyle.underline ? { type: UnderlineType.SINGLE } : undefined,
+              text: 'Techniques: ',
+              bold: skillsLabelStyle.bold !== false,
+              size: ptToHalfPt(skillsLabelStyle.size || fonts.body_size),
+              color: colorToHex(skillsLabelStyle.color || colors.text),
+              font: skillsLabelStyle.font || fonts.body_font,
             }),
-          ],
-          alignment: section.paragraph?.alignment === 'center' ? AlignmentType.CENTER : AlignmentType.LEFT,
-          spacing: {
-            before: mmToTwip(section.spacing?.top || spacing.section_spacing),
-            after: mmToTwip(section.spacing?.bottom || spacing.element_spacing),
-          }
-        })
-      );
-
-      if (sectionName.toLowerCase().includes('compétence')) {
-        const subcategories = extractedData.skills?.subcategories || [];
-        for (const subcategory of subcategories) {
-          const subcategoryStyle = elementStyles.skill_subcategories?.find((sc: any) => sc.name === subcategory.name)?.style || elementStyles.skills_label || {};
-          children.push(
-            new Paragraph({
-              children: [
-                new TextRun({
-                  text: subcategory.name + ': ',
-                  bold: subcategoryStyle.bold !== false,
-                  italic: subcategoryStyle.italic || false,
-                  size: ptToHalfPt(subcategoryStyle.size || fonts.body_size),
-                  color: colorToHex(subcategoryStyle.color || colors.text),
-                  font: subcategoryStyle.font || fonts.body_font,
-                }),
-                new TextRun({
-                  text: subcategory.items.join(', '),
-                  size: ptToHalfPt(elementStyles.skills_item?.size || fonts.body_size),
-                  color: colorToHex(elementStyles.skills_item?.color || colors.text),
-                  font: elementStyles.skills_item?.font || fonts.body_font,
-                }),
-              ],
-              spacing: { after: ptToHalfPt(spacing.element_spacing) }
-            })
-          );
-        }
-        if (extractedData.skills?.languages?.length > 0) {
-          children.push(
-            new Paragraph({
-              children: [
-                new TextRun({
-                  text: 'Langues: ',
-                  bold: elementStyles.skills_label?.bold !== false,
-                  italic: elementStyles.skills_label?.italic || false,
-                  size: ptToHalfPt(elementStyles.skills_label?.size || fonts.body_size),
-                  color: colorToHex(elementStyles.skills_label?.color || colors.text),
-                  font: elementStyles.skills_label?.font || fonts.body_font,
-                }),
-                new TextRun({
-                  text: extractedData.skills.languages.join(', '),
-                  size: ptToHalfPt(elementStyles.skills_item?.size || fonts.body_size),
-                  color: colorToHex(elementStyles.skills_item?.color || colors.text),
-                  font: elementStyles.skills_item?.font || fonts.body_font,
-                }),
-              ],
-              spacing: { after: ptToHalfPt(spacing.element_spacing) }
-            })
-          );
-        }
-        if (extractedData.skills?.certifications?.length > 0) {
-          children.push(
-            new Paragraph({
-              children: [
-                new TextRun({
-                  text: 'Certifications: ',
-                  bold: elementStyles.skills_label?.bold !== false,
-                  italic: elementStyles.skills_label?.italic || false,
-                  size: ptToHalfPt(elementStyles.skills_label?.size || fonts.body_size),
-                  color: colorToHex(elementStyles.skills_label?.color || colors.text),
-                  font: elementStyles.skills_label?.font || fonts.body_font,
-                }),
-                new TextRun({
-                  text: extractedData.skills.certifications.join(', '),
-                  size: ptToHalfPt(elementStyles.skills_item?.size || fonts.body_size),
-                  color: colorToHex(elementStyles.skills_item?.color || colors.text),
-                  font: elementStyles.skills_item?.font || fonts.body_font,
-                }),
-              ],
-              spacing: { after: ptToHalfPt(spacing.element_spacing) }
-            })
-          );
-        }
-      } else if (sectionName.toLowerCase().includes('expérience')) {
-        for (const mission of sectionData) {
-          children.push(
-            new Paragraph({
-              children: [
-                new TextRun({
-                  text: `${mission.date_start || ''} - ${mission.date_end || ''} ${mission.role || ''} @ ${mission.client || 'N/A'}`,
-                  bold: elementStyles.mission_title?.bold !== false,
-                  size: ptToHalfPt(elementStyles.mission_title?.size || fonts.body_size),
-                  color: colorToHex(elementStyles.mission_title?.color || colors.primary),
-                  font: elementStyles.mission_title?.font || fonts.body_font,
-                }),
-              ],
-              spacing: { after: ptToHalfPt(spacing.element_spacing) }
-            })
-          );
-          if (mission.context) {
-            children.push(
-              new Paragraph({
-                children: [
-                  new TextRun({
-                    text: 'Contexte: ',
-                    bold: true,
-                    size: ptToHalfPt(elementStyles.mission_context?.size || fonts.body_size),
-                    color: colorToHex(elementStyles.mission_context?.color || colors.text),
-                    font: elementStyles.mission_context?.font || fonts.body_font,
-                  }),
-                  new TextRun({
-                    text: mission.context,
-                    italic: elementStyles.mission_context?.italic !== false,
-                    size: ptToHalfPt(elementStyles.mission_context?.size || fonts.body_size),
-                    color: colorToHex(elementStyles.mission_context?.color || colors.text),
-                    font: elementStyles.mission_context?.font || fonts.body_font,
-                  }),
-                ],
-                spacing: { after: ptToHalfPt(spacing.element_spacing) }
-              })
-            );
-          }
-          if (mission.achievements?.length > 0) {
-            children.push(
-              new Paragraph({
-                children: [
-                  new TextRun({
-                    text: 'Missions',
-                    bold: true,
-                    size: ptToHalfPt(elementStyles.mission_achievement?.size || fonts.body_size),
-                    color: colorToHex(elementStyles.mission_achievement?.color || colors.text),
-                    font: elementStyles.mission_achievement?.font || fonts.body_font,
-                  }),
-                ],
-                spacing: { after: ptToHalfPt(spacing.element_spacing) }
-              })
-            );
-            for (const achievement of mission.achievements) {
-              children.push(
-                new Paragraph({
-                  children: [
-                    new TextRun({
-                      text: `${elementStyles.mission_achievement?.bulletChar || '•'} ${achievement}`,
-                      size: ptToHalfPt(elementStyles.mission_achievement?.size || fonts.body_size),
-                      color: colorToHex(elementStyles.mission_achievement?.color || colors.text),
-                      font: elementStyles.mission_achievement?.font || fonts.body_font,
-                    }),
-                  ],
-                  indent: { left: mmToTwip(visualElements.bullets?.indent || '10mm') },
-                  spacing: { after: ptToHalfPt(spacing.element_spacing) }
-                })
-              );
-            }
-          }
-          if (mission.environment?.length > 0) {
-            children.push(
-              new Paragraph({
-                children: [
-                  new TextRun({
-                    text: 'Environnement: ',
-                    bold: elementStyles.mission_environment?.bold !== false,
-                    size: ptToHalfPt(elementStyles.mission_environment?.size || fonts.body_size),
-                    color: colorToHex(elementStyles.mission_environment?.color || colors.text),
-                    font: elementStyles.mission_environment?.font || fonts.body_font,
-                  }),
-                  new TextRun({
-                    text: mission.environment.join(', '),
-                    size: ptToHalfPt(elementStyles.mission_environment?.size || fonts.body_size),
-                    color: colorToHex(elementStyles.mission_environment?.color || colors.text),
-                    font: elementStyles.mission_environment?.font || fonts.body_font,
-                  }),
-                ],
-                spacing: { after: ptToHalfPt(spacing.element_spacing) }
-              })
-            );
-          }
-        }
-      } else if (sectionName.toLowerCase().includes('formation')) {
-        for (const edu of sectionData) {
-          children.push(
-            new Paragraph({
-              children: [
-                new TextRun({
-                  text: `${edu.year || ''} ${edu.degree || 'N/A'} @ ${edu.institution || ''}`,
-                  bold: elementStyles.education_degree?.bold !== false,
-                  size: ptToHalfPt(elementStyles.education_degree?.size || fonts.body_size),
-                  color: colorToHex(elementStyles.education_degree?.color || colors.text),
-                  font: elementStyles.education_degree?.font || fonts.body_font,
-                }),
-              ],
-              spacing: { after: ptToHalfPt(spacing.element_spacing) }
-            })
-          );
-          if (edu.field) {
-            children.push(
-              new Paragraph({
-                children: [
-                  new TextRun({
-                    text: edu.field,
-                    size: ptToHalfPt(elementStyles.education_place?.size || fonts.body_size),
-                    color: colorToHex(elementStyles.education_place?.color || colors.text),
-                    font: elementStyles.education_place?.font || fonts.body_font,
-                  }),
-                ],
-                spacing: { after: ptToHalfPt(spacing.element_spacing) }
-              })
-            );
-          }
-        }
+          ]),
+          ...skills.technical.map((skill: string) => 
+            createContentParagraph([
+              new TextRun({ 
+                text: `${bulletChar} ${skill}`,
+                size: ptToHalfPt(skillsItemStyle.size || bulletStyle.size || fonts.body_size),
+                color: colorToHex(skillsItemStyle.color || bulletStyle.color || colors.text),
+                font: skillsItemStyle.font || bulletStyle.font || fonts.body_font,
+                bold: skillsItemStyle.bold || false,
+              }),
+            ], 0.3)
+          )
+        );
       }
+
+      if (skills.tools?.length > 0) {
+        children.push(
+          createContentParagraph([
+            new TextRun({ 
+              text: 'Outils: ',
+              bold: skillsLabelStyle.bold !== false,
+              size: ptToHalfPt(skillsLabelStyle.size || fonts.body_size),
+              color: colorToHex(skillsLabelStyle.color || colors.text),
+              font: skillsLabelStyle.font || fonts.body_font,
+            }),
+            new TextRun({ 
+              text: skills.tools.join(', '),
+              size: ptToHalfPt(skillsItemStyle.size || fonts.body_size),
+              color: colorToHex(skillsItemStyle.color || colors.text),
+              font: skillsItemStyle.font || fonts.body_font,
+              bold: skillsItemStyle.bold || false,
+            }),
+          ])
+        );
+      }
+
+      if (skills.languages?.length > 0) {
+        children.push(
+          createContentParagraph([
+            new TextRun({ 
+              text: 'Langues: ',
+              bold: skillsLabelStyle.bold !== false,
+              size: ptToHalfPt(skillsLabelStyle.size || fonts.body_size),
+              color: colorToHex(skillsLabelStyle.color || colors.text),
+              font: skillsLabelStyle.font || fonts.body_font,
+            }),
+            new TextRun({ 
+              text: skills.languages.join(', '),
+              size: ptToHalfPt(skillsItemStyle.size || fonts.body_size),
+              color: colorToHex(skillsItemStyle.color || colors.text),
+              font: skillsItemStyle.font || fonts.body_font,
+              bold: skillsItemStyle.bold || false,
+            }),
+          ])
+        );
+      }
+
       children.push(new Paragraph({ text: '' }));
     }
 
+    // EXPÉRIENCES PROFESSIONNELLES
+    const missionTitleStyle = templateStyle.element_styles?.mission_title || {};
+    const missionContextStyle = templateStyle.element_styles?.mission_context || {};
+    const missionAchievementStyle = templateStyle.element_styles?.mission_achievement || {};
+    const missionEnvironmentStyle = templateStyle.element_styles?.mission_environment || {};
+    
+    if (missions.length > 0) {
+      children.push(createSectionTitle('Expériences Professionnelles'));
+
+      missions.forEach((mission: any) => {
+        // Titre de mission (Client)
+        children.push(
+          createContentParagraph([
+            new TextRun({ 
+              text: `${mission.client || 'N/A'}`,
+              bold: missionTitleStyle.bold !== false,
+              size: ptToHalfPt(missionTitleStyle.size || fonts.body_size),
+              color: colorToHex(missionTitleStyle.color || colors.primary),
+              font: missionTitleStyle.font || fonts.body_font,
+            }),
+          ])
+        );
+
+        // Dates
+        children.push(
+          createContentParagraph([
+            new TextRun({ 
+              text: `${mission.date_start || ''} - ${mission.date_end || ''}`,
+              italics: missionContextStyle.italics !== false,
+              size: ptToHalfPt(missionContextStyle.size || fonts.body_size) - 2,
+              color: colorToHex(missionContextStyle.color || colors.secondary || colors.text),
+              font: missionContextStyle.font || fonts.body_font,
+            }),
+          ])
+        );
+
+        // Contexte
+        if (mission.context) {
+          children.push(
+            createContentParagraph([
+              new TextRun({ 
+                text: 'Contexte: ',
+                bold: true,
+                size: ptToHalfPt(missionContextStyle.size || fonts.body_size),
+                color: colorToHex(colors.text),
+                font: missionContextStyle.font || fonts.body_font,
+              }),
+              new TextRun({ 
+                text: mission.context,
+                size: ptToHalfPt(missionContextStyle.size || fonts.body_size),
+                color: colorToHex(missionContextStyle.color || colors.text),
+                font: missionContextStyle.font || fonts.body_font,
+                italics: missionContextStyle.italics || false,
+              }),
+            ])
+          );
+        }
+
+        // Réalisations
+        if (mission.achievements?.length > 0) {
+          children.push(
+            createContentParagraph([
+              new TextRun({ 
+                text: 'Réalisations:',
+                bold: true,
+                size: ptToHalfPt(missionAchievementStyle.size || fonts.body_size),
+                color: colorToHex(colors.text),
+                font: missionAchievementStyle.font || fonts.body_font,
+              }),
+            ])
+          );
+
+          mission.achievements.forEach((achievement: string) => {
+            children.push(
+              createContentParagraph([
+                new TextRun({ 
+                  text: `• ${achievement}`,
+                  size: ptToHalfPt(missionAchievementStyle.size || fonts.body_size),
+                  color: colorToHex(missionAchievementStyle.color || colors.text),
+                  font: missionAchievementStyle.font || fonts.body_font,
+                }),
+              ], 0.3)
+            );
+          });
+        }
+
+        // Environnement technique
+        if (mission.environment?.length > 0) {
+          children.push(
+            createContentParagraph([
+              new TextRun({ 
+                text: 'Environnement: ',
+                bold: missionEnvironmentStyle.bold !== false,
+                size: ptToHalfPt(missionEnvironmentStyle.size || fonts.body_size),
+                color: colorToHex(missionEnvironmentStyle.color || colors.text),
+                font: missionEnvironmentStyle.font || fonts.body_font,
+              }),
+              new TextRun({ 
+                text: mission.environment.join(', '),
+                size: ptToHalfPt(missionEnvironmentStyle.size || fonts.body_size),
+                color: colorToHex(missionEnvironmentStyle.color || colors.text),
+                font: missionEnvironmentStyle.font || fonts.body_font,
+              }),
+            ])
+          );
+        }
+
+        children.push(new Paragraph({ text: '' }));
+      });
+    }
+
+    // FORMATION
+    const educationDegreeStyle = templateStyle.element_styles?.education_degree || {};
+    const educationInfoStyle = templateStyle.element_styles?.education_info || {};
+    
+    if (education.length > 0) {
+      children.push(createSectionTitle('Formation'));
+
+      education.forEach((edu: any) => {
+        children.push(
+          createContentParagraph([
+            new TextRun({ 
+              text: edu.degree || 'N/A',
+              bold: educationDegreeStyle.bold !== false,
+              size: ptToHalfPt(educationDegreeStyle.size || fonts.body_size),
+              color: colorToHex(educationDegreeStyle.color || colors.text),
+              font: educationDegreeStyle.font || fonts.body_font,
+            }),
+          ]),
+          createContentParagraph([
+            new TextRun({ 
+              text: `${edu.institution || ''} - ${edu.year || ''}`,
+              italics: educationInfoStyle.italics !== false,
+              size: ptToHalfPt(educationInfoStyle.size || fonts.body_size),
+              color: colorToHex(educationInfoStyle.color || colors.secondary || colors.text),
+              font: educationInfoStyle.font || fonts.body_font,
+              bold: educationInfoStyle.bold || false,
+            }),
+          ])
+        );
+
+        if (edu.field) {
+          children.push(
+            createContentParagraph([
+              new TextRun({ 
+                text: `Spécialité: ${edu.field}`,
+                size: ptToHalfPt(educationInfoStyle.size || fonts.body_size),
+                color: colorToHex(educationInfoStyle.color || colors.text),
+                font: educationInfoStyle.font || fonts.body_font,
+                bold: educationInfoStyle.bold || false,
+              }),
+            ])
+          );
+        }
+
+        children.push(new Paragraph({ text: '' }));
+      });
+    }
+
+    // Créer le document avec les marges du template
+    const layout = templateStyle.layout || {};
+    const margins = layout.margins || { top: "20mm", right: "15mm", bottom: "20mm", left: "15mm" };
+    
     const doc = new Document({
       sections: [{
         properties: {
           page: {
             margin: {
-              top: mmToTwip(templateStyle.layout?.margins?.top || "20mm"),
-              right: mmToTwip(templateStyle.layout?.margins?.right || "15mm"),
-              bottom: mmToTwip(templateStyle.layout?.margins?.bottom || "20mm"),
-              left: mmToTwip(templateStyle.layout?.margins?.left || "15mm"),
+              top: mmToTwip(margins.top || "20mm"),
+              right: mmToTwip(margins.right || "15mm"),
+              bottom: mmToTwip(margins.bottom || "20mm"),
+              left: mmToTwip(margins.left || "15mm"),
             },
           },
         },
-        headers: headers.length > 0 ? { default: new Header({ children: headers }) } : undefined,
+        headers,
         children,
       }],
     });
 
+    // Générer le fichier DOCX
     const buffer = await Packer.toBuffer(doc);
-    const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+    const blob = new Blob([buffer], { 
+      type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' 
+    });
 
-    const fileName = `${trigram} CV.docx`;
+    // Nom du fichier généré - inclure le titre/poste
+    const titlePart = title ? ` ${title}` : '';
+    const fileName = `${trigram} DC${titlePart}.docx`;
     const filePath = `generated-${Date.now()}-${fileName}`;
 
+    // Upload vers Supabase Storage
     const { error: uploadError } = await supabase.storage
       .from('cv-generated')
       .upload(filePath, blob, {
@@ -400,9 +659,12 @@ serve(async (req) => {
         upsert: true
       });
 
-    if (uploadError) throw uploadError;
+    if (uploadError) {
+      throw uploadError;
+    }
 
-    await supabase
+    // Mettre à jour le document avec le fichier généré
+    const { error: updateError } = await supabase
       .from('cv_documents')
       .update({ 
         generated_file_path: filePath,
@@ -411,6 +673,10 @@ serve(async (req) => {
       })
       .eq('id', cvDocumentId);
 
+    if (updateError) {
+      throw updateError;
+    }
+
     return new Response(
       JSON.stringify({ 
         success: true, 
@@ -418,14 +684,22 @@ serve(async (req) => {
         fileName,
         message: 'CV Word généré avec succès'
       }),
-      { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 }
+      { 
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        status: 200 
+      }
     );
 
   } catch (error) {
     console.error('Error in generate-cv-word:', error);
     return new Response(
-      JSON.stringify({ error: error instanceof Error ? error.message : 'Unknown error' }),
-      { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 500 }
+      JSON.stringify({ 
+        error: error instanceof Error ? error.message : 'Unknown error' 
+      }),
+      { 
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        status: 500
+      }
     );
   }
 });
