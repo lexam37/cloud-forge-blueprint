@@ -143,7 +143,7 @@ async function analyzeDocxTemplate(docxData: Blob, supabase: any): Promise<any> 
       if (sizeMatch) {
         const width = parseInt(sizeMatch[1]) / 56.69; // twips to mm
         const height = parseInt(sizeMatch[2]) / 56.69;
-        pageLayout.size = (width > 200 && height > 280) ? "A4" : "Letter"; // Approximation
+        pageLayout.size = (width > 200 && height > 280) ? "A4" : "Letter";
       }
 
       // Columns
@@ -151,84 +151,20 @@ async function analyzeDocxTemplate(docxData: Blob, supabase: any): Promise<any> 
       if (colsMatch) {
         const colCount = parseInt(colsMatch[1]);
         pageLayout.columns.count = colCount;
-        pageLayout.columns.widths = colCount === 2 ? [35, 65] : [100]; // Default split for 2 columns
+        pageLayout.columns.widths = colCount === 2 ? [35, 65] : [100];
       }
     }
 
     // === LOGO EXTRACTION ===
-    let logoData: any = null;
+    let logoData: any = null; // Ignored as per requirement
     if (headerXml && headerRelsXml) {
-      console.log('📋 Extracting logo from header...');
-      
-      const imageRelations: { [key: string]: string } = {};
-      const relMatches = headerRelsXml.matchAll(/<Relationship[^>]+Id="([^"]+)"[^>]+Type="[^"]*image[^"]*"[^>]+Target="([^"]+)"/g);
-      for (const match of relMatches) {
-        imageRelations[match[1]] = 'word/' + match[2].replace('../', '');
-      }
-      
-      const drawingMatches = headerXml.matchAll(/<w:drawing>(.*?)<\/w:drawing>/gs);
-      for (const drawingMatch of drawingMatches) {
-        const drawingContent = drawingMatch[1];
-        
-        const embedMatch = drawingContent.match(/<a:blip[^>]+r:embed="([^"]+)"/);
-        if (embedMatch && imageRelations[embedMatch[1]]) {
-          const imagePath = imageRelations[embedMatch[1]];
-          
-          const extentMatch = drawingContent.match(/<wp:extent[^>]+cx="(\d+)"[^>]+cy="(\d+)"/);
-          const width = extentMatch ? parseInt(extentMatch[1]) : 914400;
-          const height = extentMatch ? parseInt(extentMatch[2]) : 914400;
-          
-          const widthMm = (width / 914400) * 25.4;
-          const heightMm = (height / 914400) * 25.4;
-          
-          let wrapping = 'inline';
-          if (drawingContent.includes('<wp:wrapSquare')) wrapping = 'square';
-          else if (drawingContent.includes('<wp:wrapTight')) wrapping = 'tight';
-          
-          const alignMatch = drawingContent.match(/<wp:align>(\w+)<\/wp:align>/);
-          const alignment = alignMatch ? alignMatch[1].toLowerCase() : 'left';
-          
-          try {
-            const imageFile = zip.file(imagePath);
-            if (imageFile) {
-              const imageBuffer = await imageFile.async('uint8array');
-              const ext = imagePath.split('.').pop() || 'png';
-              const logoFileName = `template-logo-${Date.now()}.${ext}`;
-              
-              const { error: uploadError } = await supabase.storage
-                .from('company-logos')
-                .upload(logoFileName, imageBuffer, {
-                  contentType: `image/${ext}`,
-                  upsert: true
-                });
-              
-              if (!uploadError) {
-                console.log(`✅ Logo saved: ${widthMm.toFixed(1)}x${heightMm.toFixed(1)}mm, ${wrapping}, ${alignment}`);
-                logoData = {
-                  position: 'header',
-                  extracted_logo_path: logoFileName,
-                  width_mm: widthMm,
-                  height_mm: heightMm,
-                  width_emu: width,
-                  height_emu: height,
-                  wrapping: wrapping,
-                  alignment: alignment
-                };
-              }
-            }
-          } catch (err) {
-            console.error('Error saving logo:', err);
-          }
-          
-          break;
-        }
-      }
+      console.log('📋 Skipping logo extraction as per requirement...');
     }
 
     // === STYLE EXTRACTION ===
     const extractStyle = (runContent: string) => {
       const style: any = {
-        font: 'Calibri',
+        font: 'Arial', // Default to Arial to match Cober Template
         size: '11pt',
         color: '#000000',
         bold: false,
@@ -256,7 +192,6 @@ async function analyzeDocxTemplate(docxData: Blob, supabase: any): Promise<any> 
         style.underlineColor = underlineMatch[2] ? `#${underlineMatch[2]}` : style.color;
       }
       
-      // Detect case
       const textMatch = runContent.match(/<w:t[^>]*>([^<]+)<\/w:t>/);
       if (textMatch) {
         const text = textMatch[1];
@@ -312,7 +247,7 @@ async function analyzeDocxTemplate(docxData: Blob, supabase: any): Promise<any> 
           if (match) {
             borders[type] = {
               style: match[1],
-              width: (parseInt(match[2]) / 8).toFixed(2) + 'pt', // eighths of a point to pt
+              width: (parseInt(match[2]) / 8).toFixed(2) + 'pt',
               color: `#${match[3]}`
             };
           }
@@ -326,7 +261,8 @@ async function analyzeDocxTemplate(docxData: Blob, supabase: any): Promise<any> 
         const ilvlMatch = bulletMatch[1].match(/<w:ilvl[^>]+w:val="(\d+)"/);
         props.bullet = {
           level: ilvlMatch ? parseInt(ilvlMatch[1]) : 0,
-          numId: numIdMatch ? parseInt(numIdMatch[1]) : 0
+          numId: numIdMatch ? parseInt(numIdMatch[1]) : 0,
+          character: '•' // Force Cober Template bullet style
         };
       }
       
@@ -376,9 +312,12 @@ async function analyzeDocxTemplate(docxData: Blob, supabase: any): Promise<any> 
     // === ELEMENT EXTRACTION ===
     const styles: any = {};
     const allColors = new Set<string>();
+    const skillSubcategories: any[] = [];
     
     const paragraphs = documentXml.matchAll(/<w:p[^>]*>(.*?)<\/w:p>/gs);
     let isFirstPage = true;
+    let currentSection: string | null = null;
+    let currentSubcategory: string | null = null;
     
     for (const paraMatch of paragraphs) {
       const paraContent = paraMatch[1];
@@ -398,30 +337,14 @@ async function analyzeDocxTemplate(docxData: Blob, supabase: any): Promise<any> 
       const textUpper = text.toUpperCase();
       const position = headerXml?.includes(paraContent) ? 'header' : footerXml?.includes(paraContent) ? 'footer' : 'body';
       
-      
-      // Title/Métier (large font, centered or bold, often first non-header paragraph)
+      // Title/Métier (large font, centered or bold, first non-header paragraph)
       if (!styles.title && style.size >= '14pt' && (paragraph.alignment === 'center' || style.bold) && isFirstPage) {
         styles.title = { ...style, paragraph, position, text };
       }
       
-      // Commercial contact - extraction depuis le template (email/phone dans header ou body)
-      if (!styles.commercial_contact && text.match(/[\w\.-]+@[\w\.-]+\.\w+|\+?\d{10,}|\d{2}\s?\d{2}\s?\d{2}\s?\d{2}\s?\d{2}/)) {
-        const emailMatch = text.match(/([\w\.-]+@[\w\.-]+\.\w+)/);
-        const phoneMatch = text.match(/(\+?\d{2}\s?\d{2}\s?\d{2}\s?\d{2}\s?\d{2}|\+?\d{10,})/);
-        
-        // Extraire nom et prénom si présents (souvent avant ou dans le même paragraphe)
-        const nameMatch = text.match(/([A-Z][a-zéèêà]+)\s+([A-Z][A-ZÉÈÊÀ]+)/);
-        
-        styles.commercial_contact = { 
-          ...style, 
-          paragraph, 
-          position, 
-          text,
-          email: emailMatch ? emailMatch[1] : null,
-          phone: phoneMatch ? phoneMatch[1] : null,
-          first_name: nameMatch ? nameMatch[1] : null,
-          last_name: nameMatch ? nameMatch[2] : null
-        };
+      // Skip commercial contact as per requirement
+      if (text.match(/[\w\.-]+@[\w\.-]+\.\w+|\+?\d{10,}|\d{2}\s?\d{2}\s?\d{2}\s?\d{2}\s?\d{2}/)) {
+        continue;
       }
       
       // Trigram (3 letters, uppercase)
@@ -429,48 +352,57 @@ async function analyzeDocxTemplate(docxData: Blob, supabase: any): Promise<any> 
         styles.trigram = { ...style, paragraph, position, text };
       }
       
-      // Section titles (Compétences, Expériences, Formation)
+      // Section titles
       if (textUpper.includes('COMPÉTENCE') || textUpper.includes('COMPETENCE')) {
+        currentSection = 'competences';
         styles.section_competences = { ...style, paragraph, position, text };
       } else if (textUpper.includes('EXPÉRIENCE') || textUpper.includes('EXPERIENCE')) {
+        currentSection = 'experiences';
         styles.section_experiences = { ...style, paragraph, position, text };
       } else if (textUpper.includes('FORMATION') || textUpper.includes('CERTIFICATION') || textUpper.includes('DIPLÔME')) {
+        currentSection = 'formation';
         styles.section_formation = { ...style, paragraph, position, text };
       }
       
-      // Mission title (Role, Date, Company, e.g., "Développeur | 01/2020 - 12/2021 | Acme Corp")
-      if (!styles.mission_title && text.match(/\|.*\d{2}\/\d{4}\s*-\s*\d{2}\/\d{4}.*\|/)) {
-        styles.mission_title = { ...style, paragraph, position, text };
-        const dateMatch = text.match(/(\d{2}\/\d{4})\s*-\s*(\d{2}\/\d{4})/);
-        styles.mission_date_format = dateMatch ? 'MM/YYYY' : 'unknown';
+      // Skill subcategories (bold or italic, before bullet list)
+      if (currentSection === 'competences' && (style.bold || style.italic) && !paragraph.bullet && !textUpper.includes('COMPÉTENCE')) {
+        currentSubcategory = text;
+        skillSubcategories.push({ name: text, style: { ...style, paragraph, position } });
       }
       
-      // Mission context/objective (italic, often follows mission title)
-      if (!styles.mission_context && style.italic && !styles.mission_context) {
+      // Mission title (e.g., "MM/YYYY - MM/YYYY Rôle @ Entreprise" or "MM-YYYY - Actuellement")
+      if (currentSection === 'experiences' && text.match(/\d{2}[/-]\d{4}\s*-\s*(\d{2}[/-]\d{4}|Actuellement).*@/)) {
+        styles.mission_title = { ...style, paragraph, position, text };
+        const dateMatch = text.match(/(\d{2}[/-]\d{4})\s*-\s*(\d{2}[/-]\d{4}|Actuellement)/);
+        styles.mission_date_format = dateMatch ? (dateMatch[2] === 'Actuellement' ? 'MM/YYYY - Actuellement' : 'MM/YYYY - MM/YYYY') : 'unknown';
+      }
+      
+      // Mission context (italic, follows mission title)
+      if (currentSection === 'experiences' && style.italic && text.toLowerCase().startsWith('contexte')) {
         styles.mission_context = { ...style, paragraph, position, text };
       }
       
-      // Mission achievements (bullet points)
-      if (!styles.mission_achievement && paragraph.bullet) {
-        styles.mission_achievement = { ...style, paragraph, position, text, bulletChar: text[0] };
+      // Mission achievements (bullet points, labeled "Missions" or "Réalisations")
+      if (currentSection === 'experiences' && paragraph.bullet && (text.toLowerCase().includes('missions') || text.toLowerCase().includes('réalisations') || styles.mission_achievement)) {
+        styles.mission_achievement = { ...style, paragraph, position, text, bulletChar: '•' };
       }
       
-      // Mission environment (bold, often technical terms)
-      if (!styles.mission_environment && style.bold && text.match(/Java|Python|SQL|Agile/i)) {
+      // Mission environment (bold, technical terms)
+      if (currentSection === 'experiences' && style.bold && text.toLowerCase().startsWith('environnement')) {
         styles.mission_environment = { ...style, paragraph, position, text };
       }
       
-      // Skills (technical/functional, often in lists)
-      if (!styles.skills_item && (styles.section_competences || textUpper.includes('COMPÉTENCE')) && paragraph.bullet) {
-        styles.skills_item = { ...style, paragraph, position, text, bulletChar: text[0] };
+      // Skills (in compétences section, bullet points)
+      if (currentSection === 'competences' && paragraph.bullet) {
+        styles.skills_item = { ...style, paragraph, position, text, bulletChar: '•', subcategory: currentSubcategory || 'Autres' };
       }
       
-      // Education (degree, date, place/organization)
-      if (!styles.education_degree && (styles.section_formation || textUpper.includes('FORMATION')) && style.bold) {
+      // Education (in formation section, bold, with year)
+      if (currentSection === 'formation' && style.bold) {
         styles.education_degree = { ...style, paragraph, position, text };
         const dateMatch = text.match(/(\d{4})\s*-\s*(\d{4})|(\d{4})/);
+        const placeMatch = text.match(/@\s*([A-Z][a-z]+(?:\s[A-Z][a-z]+)*)$/);
         styles.education_date_format = dateMatch ? (dateMatch[2] ? 'YYYY-YYYY' : 'YYYY') : 'unknown';
-        const placeMatch = text.match(/,?\s*([A-Z][a-z]+(?:\s[A-Z][a-z]+)*)$/);
         if (placeMatch) styles.education_place = { ...style, paragraph, position, text: placeMatch[1] };
       }
       
@@ -489,25 +421,24 @@ async function analyzeDocxTemplate(docxData: Blob, supabase: any): Promise<any> 
       first_page_different: settingsXml?.includes('<w:titlePg') || false
     };
     
-    const bodyStyle = styles.body_text || { font: 'Calibri', size: '11pt', color: '#000000' };
-    const titleStyle = styles.section_competences || styles.section_experiences || styles.section_formation || { font: 'Calibri', size: '16pt', color: '#2563eb', bold: true };
-    const primaryColor = Array.from(allColors)[0] || '#2563eb';
+    const bodyStyle = styles.body_text || { font: 'Arial', size: '11pt', color: '#000000' };
+    const titleStyle = styles.section_competences || styles.section_experiences || styles.section_formation || { font: 'Arial', size: '14pt', color: '#000000', bold: true, case: 'uppercase' };
+    const primaryColor = Array.from(allColors)[0] || '#000000';
     
     console.log('✅ Extraction complete');
     console.log('  Font:', bodyStyle.font);
     console.log('  Primary color:', primaryColor);
-    console.log('  Logo:', logoData ? `${logoData.width_mm.toFixed(1)}x${logoData.height_mm.toFixed(1)}mm` : 'Not found');
     console.log('  Tables:', tables.length);
     
     return {
       layout: pageLayout,
       colors: {
         primary: primaryColor,
-        secondary: "#64748b",
-        text: "#1e293b",
+        secondary: "#000000",
+        text: "#000000",
         background: "#ffffff",
         accent: primaryColor,
-        borders: "#e2e8f0"
+        borders: "#000000"
       },
       fonts: {
         title_font: titleStyle.font,
@@ -519,66 +450,52 @@ async function analyzeDocxTemplate(docxData: Blob, supabase: any): Promise<any> 
       },
       sections: [
         {
-          name: "PROFIL",
-          position: styles.title?.position || "top-center",
-          title_style: styles.title || titleStyle,
-          spacing: { top: "0mm", bottom: "10mm" },
-          paragraph: styles.title?.paragraph || { alignment: "center", spacing: { before: "0pt", after: "12pt" }, indent: { left: "0mm", firstLine: "0mm" } }
-        },
-        {
           name: "COMPÉTENCES",
           position: styles.section_competences?.position || "body",
           title_style: styles.section_competences || titleStyle,
           spacing: { top: "10mm", bottom: "5mm" },
-          paragraph: styles.section_competences?.paragraph || titleStyle.paragraph
+          paragraph: styles.section_competences?.paragraph || { alignment: "left", spacing: { before: "12pt", after: "6pt" }, indent: { left: "0mm", firstLine: "0mm" } }
         },
         {
-          name: "EXPÉRIENCES",
+          name: "EXPÉRIENCE",
           position: styles.section_experiences?.position || "body",
           title_style: styles.section_experiences || titleStyle,
           spacing: { top: "10mm", bottom: "5mm" },
-          paragraph: styles.section_experiences?.paragraph || titleStyle.paragraph
+          paragraph: styles.section_experiences?.paragraph || { alignment: "left", spacing: { before: "12pt", after: "6pt" }, indent: { left: "0mm", firstLine: "0mm" } }
         },
         {
-          name: "FORMATION",
+          name: "FORMATIONS & CERTIFICATIONS",
           position: styles.section_formation?.position || "body",
           title_style: styles.section_formation || titleStyle,
           spacing: { top: "10mm", bottom: "5mm" },
-          paragraph: styles.section_formation?.paragraph || titleStyle.paragraph
+          paragraph: styles.section_formation?.paragraph || { alignment: "left", spacing: { before: "12pt", after: "6pt" }, indent: { left: "0mm", firstLine: "0mm" } }
         }
       ],
       element_styles: {
-        commercial_contact: styles.commercial_contact || { 
-          ...bodyStyle, 
-          position: 'header', 
-          text: '',
-          email: null,
-          phone: null,
-          first_name: null,
-          last_name: null
-        },
+        commercial_contact: { ...bodyStyle, position: 'header', text: '', email: null, phone: null, first_name: null, last_name: null },
         trigram: styles.trigram || { ...bodyStyle, color: primaryColor, bold: true, text: '' },
         title: styles.title || { ...titleStyle, text: '' },
         section_competences: styles.section_competences || titleStyle,
         section_experiences: styles.section_experiences || titleStyle,
         section_formation: styles.section_formation || titleStyle,
         mission_title: styles.mission_title || { ...bodyStyle, bold: true, text: '' },
-        mission_date_format: styles.mission_date_format || 'MM/YYYY',
+        mission_date_format: styles.mission_date_format || 'MM/YYYY - MM/YYYY',
         mission_context: styles.mission_context || { ...bodyStyle, italic: true, text: '' },
         mission_achievement: styles.mission_achievement || { ...bodyStyle, bulletChar: '•', text: '' },
         mission_environment: styles.mission_environment || { ...bodyStyle, bold: true, text: '' },
         skills_label: styles.skills_label || { ...bodyStyle, bold: true, text: '' },
-        skills_item: styles.skills_item || { ...bodyStyle, bulletChar: '•', text: '' },
+        skills_item: styles.skills_item || { ...bodyStyle, bulletChar: '•', text: '', subcategory: 'Autres' },
+        skill_subcategories: skillSubcategories,
         education_degree: styles.education_degree || { ...bodyStyle, bold: true, text: '' },
         education_date_format: styles.education_date_format || 'YYYY',
         education_place: styles.education_place || { ...bodyStyle, text: '' },
         body_text: bodyStyle
       },
       visual_elements: {
-        logo: logoData,
+        logo: null,
         tables: tables,
-        borders: { style: "solid", width: "0.5pt", color: "#d0d0d0" },
-        bullets: styles.mission_achievement ? { character: styles.mission_achievement.bulletChar, color: primaryColor, indent: "12mm", font: bodyStyle.font, size: bodyStyle.size } : { character: '•', color: primaryColor, indent: "12mm" }
+        borders: { style: "solid", width: "0.5pt", color: "#000000" },
+        bullets: styles.mission_achievement ? { character: '•', color: primaryColor, indent: "10mm", font: bodyStyle.font, size: bodyStyle.size } : { character: '•', color: primaryColor, indent: "10mm" }
       },
       spacing: {
         section_spacing: "12pt",
@@ -603,75 +520,69 @@ function getDefaultStructure() {
       columns: { count: 1, widths: [100] }
     },
     colors: {
-      primary: "#2563eb",
-      secondary: "#64748b",
-      text: "#1e293b",
+      primary: "#000000",
+      secondary: "#000000",
+      text: "#000000",
       background: "#ffffff",
-      accent: "#3b82f6",
-      borders: "#e2e8f0"
+      accent: "#000000",
+      borders: "#000000"
     },
     fonts: {
-      title_font: "Calibri",
-      body_font: "Calibri",
-      title_size: "16pt",
+      title_font: "Arial",
+      body_font: "Arial",
+      title_size: "14pt",
       body_size: "11pt",
       title_weight: "bold",
       line_height: "1.15"
     },
     sections: [
       {
-        name: "PROFIL",
-        position: "top-center",
-        title_style: { font: "Calibri", size: "20pt", color: "#2563eb", bold: true, underline: false },
-        spacing: { top: "0mm", bottom: "10mm" },
-        paragraph: { alignment: "center", spacing: { before: "0pt", after: "12pt" }, indent: { left: "0mm", firstLine: "0mm" } }
-      },
-      {
         name: "COMPÉTENCES",
         position: "body",
-        title_style: { font: "Calibri", size: "16pt", color: "#2563eb", bold: true },
+        title_style: { font: "Arial", size: "14pt", color: "#000000", bold: true, case: 'uppercase' },
         spacing: { top: "10mm", bottom: "5mm" },
         paragraph: { alignment: "left", spacing: { before: "12pt", after: "6pt" }, indent: { left: "0mm", firstLine: "0mm" } }
       },
       {
-        name: "EXPÉRIENCES",
+        name: "EXPÉRIENCE",
         position: "body",
-        title_style: { font: "Calibri", size: "16pt", color: "#2563eb", bold: true },
+        title_style: { font: "Arial", size: "14pt", color: "#000000", bold: true, case: 'uppercase' },
         spacing: { top: "10mm", bottom: "5mm" },
         paragraph: { alignment: "left", spacing: { before: "12pt", after: "6pt" }, indent: { left: "0mm", firstLine: "0mm" } }
       },
       {
-        name: "FORMATION",
+        name: "FORMATIONS & CERTIFICATIONS",
         position: "body",
-        title_style: { font: "Calibri", size: "16pt", color: "#2563eb", bold: true },
+        title_style: { font: "Arial", size: "14pt", color: "#000000", bold: true, case: 'uppercase' },
         spacing: { top: "10mm", bottom: "5mm" },
         paragraph: { alignment: "left", spacing: { before: "12pt", after: "6pt" }, indent: { left: "0mm", firstLine: "0mm" } }
       }
     ],
     element_styles: {
-      commercial_contact: { font: "Calibri", size: "11pt", color: "#000000", bold: false, position: 'header', text: '' },
-      trigram: { font: "Calibri", size: "11pt", color: "#2563eb", bold: true, text: '' },
-      title: { font: "Calibri", size: "20pt", color: "#2563eb", bold: true, text: '' },
-      section_competences: { font: "Calibri", size: "16pt", color: "#2563eb", bold: true },
-      section_experiences: { font: "Calibri", size: "16pt", color: "#2563eb", bold: true },
-      section_formation: { font: "Calibri", size: "16pt", color: "#2563eb", bold: true },
-      mission_title: { font: "Calibri", size: "11pt", color: "#2563eb", bold: true, text: '' },
-      mission_date_format: 'MM/YYYY',
-      mission_context: { font: "Calibri", size: "11pt", color: "#64748b", italic: true, text: '' },
-      mission_achievement: { font: "Calibri", size: "11pt", color: "#000000", bulletChar: '•', text: '' },
-      mission_environment: { font: "Calibri", size: "11pt", color: "#000000", bold: true, text: '' },
-      skills_label: { font: "Calibri", size: "11pt", color: "#000000", bold: true, text: '' },
-      skills_item: { font: "Calibri", size: "11pt", color: "#000000", bulletChar: '•', text: '' },
-      education_degree: { font: "Calibri", size: "11pt", color: "#000000", bold: true, text: '' },
+      commercial_contact: { font: "Arial", size: "11pt", color: "#000000", bold: false, position: 'header', text: '', email: null, phone: null, first_name: null, last_name: null },
+      trigram: { font: "Arial", size: "11pt", color: "#000000", bold: true, text: '' },
+      title: { font: "Arial", size: "14pt", color: "#000000", bold: true, text: '' },
+      section_competences: { font: "Arial", size: "14pt", color: "#000000", bold: true, case: 'uppercase' },
+      section_experiences: { font: "Arial", size: "14pt", color: "#000000", bold: true, case: 'uppercase' },
+      section_formation: { font: "Arial", size: "14pt", color: "#000000", bold: true, case: 'uppercase' },
+      mission_title: { font: "Arial", size: "11pt", color: "#000000", bold: true, text: '' },
+      mission_date_format: 'MM/YYYY - MM/YYYY',
+      mission_context: { font: "Arial", size: "11pt", color: "#000000", italic: true, text: '' },
+      mission_achievement: { font: "Arial", size: "11pt", color: "#000000", bulletChar: '•', text: '' },
+      mission_environment: { font: "Arial", size: "11pt", color: "#000000", bold: true, text: '' },
+      skills_label: { font: "Arial", size: "11pt", color: "#000000", bold: true, text: '' },
+      skills_item: { font: "Arial", size: "11pt", color: "#000000", bulletChar: '•', text: '', subcategory: 'Autres' },
+      skill_subcategories: [],
+      education_degree: { font: "Arial", size: "11pt", color: "#000000", bold: true, text: '' },
       education_date_format: 'YYYY',
-      education_place: { font: "Calibri", size: "11pt", color: "#000000", text: '' },
-      body_text: { font: "Calibri", size: "11pt", color: "#000000" }
+      education_place: { font: "Arial", size: "11pt", color: "#000000", text: '' },
+      body_text: { font: "Arial", size: "11pt", color: "#000000" }
     },
     visual_elements: {
       logo: null,
       tables: [],
-      borders: { style: "solid", width: "0.5pt", color: "#d0d0d0" },
-      bullets: { character: "•", color: "#2563eb", indent: "12mm" }
+      borders: { style: "solid", width: "0.5pt", color: "#000000" },
+      bullets: { character: "•", color: "#000000", indent: "10mm" }
     },
     spacing: {
       section_spacing: "12pt",
