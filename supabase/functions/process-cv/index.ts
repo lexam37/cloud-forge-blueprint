@@ -1,7 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { docx4js } from "https://esm.sh/docx4js@3.2.7";
-import { parse as parsePdf } from "https://esm.sh/pdf-parse@1.1.1";
+import { JSZip } from "https://esm.sh/jszip@3.10.1";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -75,70 +74,43 @@ serve(async (req) => {
       const bytes = new Uint8Array(arrayBuffer);
 
       if (fileType === 'docx' || fileType === 'doc') {
-        const doc = await docx4js.load(bytes);
-        const paragraphs = doc.officeDocument.content('w\\:p').map((para: any) => {
-          const text = para.text().trim();
-          if (!text) return null;
+        const zip = await JSZip.loadAsync(arrayBuffer);
+        const documentXml = await zip.file('word/document.xml')?.async('text');
+        
+        if (!documentXml) throw new Error('document.xml not found');
 
+        const paragraphs = Array.from(documentXml.matchAll(/<w:p[^>]*>(.*?)<\/w:p>/gs));
+        for (const para of paragraphs) {
+          const paraContent = para[1];
+          const textMatches = Array.from(paraContent.matchAll(/<w:t[^>]*>([^<]+)<\/w:t>/g));
+          let text = textMatches.map(m => m[1]).join('').trim();
+          if (!text) continue;
+
+          // Nettoyage rigoureux des caractères parasites
+          text = text.replace(/^[\•\-\*É°\u2022\u25CF]\s*/g, '').replace(/\s+/g, ' ').trim();
+
+          const runMatch = paraContent.match(/<w:r[^>]*>(.*?)<\/w:r>/s);
           const style: any = {};
-          const run = para.find('w\\:r').first();
-          if (run) {
-            const font = run.find('w\\:rFonts').attr('w:ascii');
-            if (font) style.font = font;
-            const size = run.find('w\\:sz').attr('w:val');
-            if (size) style.size = `${parseInt(size) / 2}pt`;
-            const color = run.find('w\\:color').attr('w:val');
-            if (color && color !== 'auto') style.color = `#${color}`;
-            style.bold = !!run.find('w\\:b').length;
-            style.italic = !!run.find('w\\:i').length;
+          if (runMatch) {
+            const fontMatch = runMatch[1].match(/<w:rFonts[^>]+w:ascii="([^"]+)"/);
+            if (fontMatch) style.font = fontMatch[1];
+            const sizeMatch = runMatch[1].match(/<w:sz[^>]+w:val="(\d+)"/);
+            if (sizeMatch) style.size = `${parseInt(sizeMatch[1]) / 2}pt`;
+            const colorMatch = runMatch[1].match(/<w:color[^>]+w:val="([^"]+)"/);
+            if (colorMatch && colorMatch[1] !== 'auto') style.color = `#${colorMatch[1]}`;
+            style.bold = /<w:b[\/\s>]/.test(runMatch[1]);
+            style.italic = /<w:i[\/\s>]/.test(runMatch[1]);
             style.case = text === text.toUpperCase() ? 'uppercase' : text === text.toLowerCase() ? 'lowercase' : 'mixed';
           }
-          style.bullet = !!para.find('w\\:numPr').length;
+          style.bullet = paraContent.match(/<w:numPr>/) ? true : false;
 
-          return { text, style };
-        }).filter((p: any) => p && p.text);
-
-        // Regrouper les compétences consécutives avec puces
-        let currentSubcategory = '';
-        const groupedData: any[] = [];
-        let skillItems: string[] = [];
-        for (const para of paragraphs) {
-          if (para.style.bullet && currentSubcategory) {
-            skillItems.push(para.text);
-          } else if (['langage/bdd', 'os', 'outils', 'méthodologies'].some(sc => para.text.toLowerCase().includes(sc))) {
-            if (skillItems.length > 0) {
-              groupedData.push({
-                text: `${currentSubcategory}: ${skillItems.join(', ')}`,
-                style: { ...para.style, bullet: false }
-              });
-              skillItems = [];
-            }
-            currentSubcategory = para.text;
-            groupedData.push(para);
-          } else {
-            if (skillItems.length > 0) {
-              groupedData.push({
-                text: `${currentSubcategory}: ${skillItems.join(', ')}`,
-                style: { ...para.style, bullet: false }
-              });
-              skillItems = [];
-              currentSubcategory = '';
-            }
-            groupedData.push(para);
-          }
+          structuredData.push({ text, style });
+          extractedText += text + '\n';
         }
-        if (skillItems.length > 0) {
-          groupedData.push({
-            text: `${currentSubcategory}: ${skillItems.join(', ')}`,
-            style: { bullet: false }
-          });
-        }
-
-        structuredData = groupedData;
-        extractedText = groupedData.map((p: any) => p.text).join('\n');
       } else if (fileType === 'pdf') {
-        const data = await parsePdf(bytes);
-        extractedText = data.text.replace(/^[•\-\*É°\u2022\u25CF]\s*/gm, '').replace(/\s+/g, ' ').trim();
+        const pdfParse = await import('https://esm.sh/pdf-parse@1.1.1');
+        const data = await pdfParse.default(bytes);
+        extractedText = data.text.replace(/^[\•\-\*É°\u2022\u25CF]\s*/gm, '').replace(/\s+/g, ' ').trim();
         structuredData = extractedText.split('\n').map(line => ({
           text: line.trim(),
           style: { font: 'Unknown', size: 'Unknown', color: '#000000', bold: false, italic: false, bullet: false, case: 'mixed' }
@@ -169,47 +141,51 @@ serve(async (req) => {
 
     const systemPrompt = `Tu es un expert en extraction et anonymisation de CV. Analyse ce CV et extrais TOUTES les informations en les ANONYMISANT, en respectant la structure du template suivant : ${JSON.stringify(sectionNames)}.
 
-ÉTAPES CRITIQUES :
-1. Créer un TRIGRAMME : première lettre du prénom + première lettre du nom + dernière lettre du nom (ex. : Jean DUPONT → JDT).
-2. SUPPRIMER toutes informations personnelles : nom, prénom, email, téléphone, adresse, photos, QR codes, liens (LinkedIn, GitHub, etc.).
-3. Mapper les sections du CV d'entrée vers les noms EXACTS du template (${sectionNames.join(', ')}) en utilisant les synonymes :
+ÉTAPES D'ANONYMISATION CRITIQUES :
+1. Créer un TRIGRAMME : première lettre du prénom + première lettre du nom + dernière lettre du nom (tout en MAJUSCULE)
+   Exemple : Jean DUPONT → JDT
+2. SUPPRIMER toutes informations personnelles : nom complet, prénom, email, téléphone, adresse, photos, QR codes, liens personnels (LinkedIn, GitHub, etc.)
+3. Identifier les sections en utilisant les noms EXACTS du template (${sectionNames.join(', ')}) et leurs synonymes : 
    - Compétences : ${sectionSynonyms['Compétences'].join(', ')}
    - Expérience : ${sectionSynonyms['Expérience'].join(', ')}
    - Formations & Certifications : ${sectionSynonyms['Formations & Certifications'].join(', ')}
-4. Pour les compétences, regrouper les items par sous-catégories (${skillSubcategories.join(', ')}) dans UNE SEULE CHAÎNE séparée par des virgules (ex. : "Langage/BDD: Spark, Hive, Hadoop"). Supprimer tout caractère parasite (É, •, etc.).
-5. Conserver la casse exacte des titres de section (${sectionNames.join(', ')}).
-6. Inclure un placeholder pour les coordonnées commerciales si dans l'en-tête.
+   Mappe les sections du CV d'entrée (ex. : Formation, Diplôme, ETUDES) vers les noms du template (ex. : Formations & Certifications).
+4. Extraire les sous-catégories de compétences (${skillSubcategories.join(', ') || 'aucune'}) avec leurs items séparés par des virgules, SANS puces ni sauts de ligne. Exemple : "Langage/BDD: Spark, Hive, Hadoop".
+5. Inclure un placeholder pour les coordonnées commerciales si présentes dans l'en-tête du template.
+6. Supprimer tout caractère parasite comme 'É', '•', '°', ou autres devant les compétences.
+7. Regrouper les compétences par sous-catégories définies dans le template (${skillSubcategories.join(', ')}).
+8. Extraire les projets, compétences, formations et missions professionnelles.
 
-Retourne un JSON avec cette structure :
+Retourne un JSON avec cette structure EXACTE :
 {
   "personal": {
-    "first_name": "prénom extrait (non inclus dans le CV final)",
-    "last_name": "nom extrait (non inclus dans le CV final)",
+    "first_name": "prénom extrait (à ne pas inclure dans le CV final)",
+    "last_name": "nom extrait (à ne pas inclure dans le CV final)",
     "trigram": "TRIGRAMME (ex: JDT)",
     "title": "titre professionnel",
     "years_experience": nombre_années,
-    "email_found": "email extrait (non inclus)",
-    "phone_found": "téléphone extrait (non inclus)",
-    "address_found": "adresse extraite (non incluse)",
-    "linkedin_found": "lien LinkedIn extrait (non inclus)",
-    "personal_links_found": ["liens personnels extraits (non inclus)"]
+    "email_found": "email extrait (à ne pas inclure)",
+    "phone_found": "téléphone extrait (à ne pas inclure)",
+    "address_found": "adresse extraite (à ne pas inclure)",
+    "linkedin_found": "lien LinkedIn extrait (à ne pas inclure)",
+    "personal_links_found": ["liens personnels extraits (à ne pas inclure)"]
   },
   "commercial_contact": {
-    "text": "Contact Commercial",
+    "text": "texte placeholder pour l'en-tête (ex: 'Contact Commercial')",
     "enabled": boolean
   },
   "key_projects": [
     {
       "title": "titre du projet",
-      "role": "rôle",
-      "description": "description"
+      "role": "rôle dans le projet",
+      "description": "description détaillée"
     }
   ],
   "skills": {
     "subcategories": [
       {
         "name": "nom de la sous-catégorie (ex: Langage/BDD)",
-        "items": ["compétence1, compétence2, compétence3"]
+        "items": ["compétence1, compétence2"]
       }
     ],
     "languages": ["langue1: niveau", "langue2: niveau"],
@@ -229,7 +205,7 @@ Retourne un JSON avec cette structure :
       "date_start": "MM-YYYY",
       "date_end": "MM-YYYY ou 'Actuellement'",
       "role": "poste occupé",
-      "context": "contexte",
+      "context": "contexte de la mission",
       "achievements": ["réalisation1", "réalisation2"],
       "environment": ["tech1", "tech2"]
     }
