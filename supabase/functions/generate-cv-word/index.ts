@@ -33,13 +33,13 @@ serve(async (req) => {
     console.log('ExtractedData:', JSON.stringify(extractedData, null, 2));
     console.log('TemplateStyle:', JSON.stringify(templateStyle, null, 2));
 
-    const colors = templateStyle.colors || { primary: "#0000FF", text: "#000000", secondary: "#000000" };
-    const fonts = templateStyle.fonts || { title_font: "Arial", body_font: "Arial", title_size: "14pt", body_size: "11pt", title_weight: "bold", line_height: "1.15" };
+    const colors = templateStyle.colors || { primary: "#142D5A", text: "#000000", secondary: "#329696" };
+    const fonts = templateStyle.fonts || { title_font: "Segoe UI Symbol", body_font: "Segoe UI Symbol", title_size: "14pt", body_size: "11pt", title_weight: "bold", line_height: "1.15" };
     const spacing = templateStyle.spacing || { section_spacing: "12pt", element_spacing: "6pt", padding: "10mm", line_spacing: "1.15" };
     const sections = templateStyle.sections || [
-      { name: "Compétences", title_style: { color: "#0000FF", size: "14pt", bold: true, case: "mixed" } },
-      { name: "Expérience", title_style: { color: "#0000FF", size: "14pt", bold: true, case: "mixed" } },
-      { name: "Formations & Certifications", title_style: { color: "#0000FF", size: "14pt", bold: true, case: "mixed" } }
+      { name: "Compétences", title_style: { color: "#142D5A", size: "14pt", bold: true, case: "mixed", font: "Segoe UI Symbol" } },
+      { name: "Expérience", title_style: { color: "#142D5A", size: "14pt", bold: true, case: "mixed", font: "Segoe UI Symbol" } },
+      { name: "Formations & Certifications", title_style: { color: "#142D5A", size: "14pt", bold: true, case: "mixed", font: "Segoe UI Symbol" } }
     ];
     const visualElements = templateStyle.visual_elements || {};
     const elementStyles = templateStyle.element_styles || {};
@@ -138,7 +138,7 @@ serve(async (req) => {
     console.log('Sections to process:', sections);
     for (const section of sections) {
       const sectionName = section.name;
-      const sectionStyle = section.title_style || { color: "#0000FF", size: "14pt", bold: true };
+      const sectionStyle = section.title_style || { color: "#142D5A", size: "14pt", bold: true, font: "Segoe UI Symbol", case: "mixed" };
       const sectionData = sectionName.toLowerCase().includes('compétence') ? extractedData.skills :
                          sectionName.toLowerCase().includes('expérience') ? extractedData.missions :
                          sectionName.toLowerCase().includes('formation') ? extractedData.education : [];
@@ -169,7 +169,7 @@ serve(async (req) => {
         const subcategories = extractedData.skills?.subcategories || [];
         console.log('Skills subcategories:', subcategories);
         for (const subcategory of subcategories) {
-          const subcategoryStyle = elementStyles.skill_subcategories?.find((sc: any) => sc.name === subcategory.name)?.style || elementStyles.skills_label || {};
+          const subcategoryStyle = elementStyles.skill_subcategories?.find((sc: any) => sc.name === subcategory.name)?.style || elementStyles.skills_label || { font: 'Segoe UI Symbol', size: '11pt', color: '#329696', bold: false };
           const items = Array.isArray(subcategory.items) ? subcategory.items.join(', ') : subcategory.items;
           children.push(
             new Paragraph({
@@ -179,14 +179,15 @@ serve(async (req) => {
                   bold: subcategoryStyle.bold !== false,
                   italic: subcategoryStyle.italic || false,
                   size: ptToHalfPt(subcategoryStyle.size || fonts.body_size),
-                  color: colorToHex(subcategoryStyle.color || colors.text),
+                  color: colorToHex(subcategoryStyle.color || colors.secondary),
                   font: subcategoryStyle.font || fonts.body_font,
                 }),
                 new TextRun({
                   text: items,
-                  size: ptToHalfPt(elementStyles.skills_item?.size || fonts.body_size),
-                  color: colorToHex(elementStyles.skills_item?.color || colors.text),
-                  font: elementStyles.skills_item?.font || fonts.body_font,
+                  bold: true, // Items en gras
+                  size: ptToHalfPt(elementStyles.skills_item?.size || '11pt'),
+                  color: colorToHex(elementStyles.skills_item?.color || '#329696'),
+                  font: elementStyles.skills_item?.font || 'Segoe UI Symbol',
                 }),
               ],
               indent: { left: mmToTwip(visualElements.bullets?.indent || '5mm') },
@@ -203,14 +204,15 @@ serve(async (req) => {
                   bold: elementStyles.skills_label?.bold !== false,
                   italic: elementStyles.skills_label?.italic || false,
                   size: ptToHalfPt(elementStyles.skills_label?.size || fonts.body_size),
-                  color: colorToHex(elementStyles.skills_label?.color || colors.text),
+                  color: colorToHex(elementStyles.skills_label?.color || colors.secondary),
                   font: elementStyles.skills_label?.font || fonts.body_font,
                 }),
                 new TextRun({
                   text: extractedData.skills.languages.join(', '),
-                  size: ptToHalfPt(elementStyles.skills_item?.size || fonts.body_size),
-                  color: colorToHex(elementStyles.skills_item?.color || colors.text),
-                  font: elementStyles.skills_item?.font || fonts.body_font,
+                  bold: true,
+                  size: ptToHalfPt(elementStyles.skills_item?.size || '11pt'),
+                  color: colorToHex(elementStyles.skills_item?.color || '#329696'),
+                  font: elementStyles.skills_item?.font || 'Segoe UI Symbol',
                 }),
               ],
               indent: { left: mmToTwip(visualElements.bullets?.indent || '5mm') },
@@ -227,14 +229,15 @@ serve(async (req) => {
                   bold: elementStyles.skills_label?.bold !== false,
                   italic: elementStyles.skills_label?.italic || false,
                   size: ptToHalfPt(elementStyles.skills_label?.size || fonts.body_size),
-                  color: colorToHex(elementStyles.skills_label?.color || colors.text),
+                  color: colorToHex(elementStyles.skills_label?.color || colors.secondary),
                   font: elementStyles.skills_label?.font || fonts.body_font,
                 }),
                 new TextRun({
                   text: extractedData.skills.certifications.join(', '),
-                  size: ptToHalfPt(elementStyles.skills_item?.size || fonts.body_size),
-                  color: colorToHex(elementStyles.skills_item?.color || colors.text),
-                  font: elementStyles.skills_item?.font || fonts.body_font,
+                  bold: true,
+                  size: ptToHalfPt(elementStyles.skills_item?.size || '11pt'),
+                  color: colorToHex(elementStyles.skills_item?.color || '#329696'),
+                  font: elementStyles.skills_item?.font || 'Segoe UI Symbol',
                 }),
               ],
               indent: { left: mmToTwip(visualElements.bullets?.indent || '5mm') },
