@@ -1,6 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.75.0";
-import { Document, Packer, Paragraph, TextRun, AlignmentType, ImageRun, UnderlineType, convertInchesToTwip, convertMillimetersToTwip, Header } from "https://esm.sh/docx@8.5.0";
+import { Document, Packer, Paragraph, TextRun, AlignmentType, ImageRun, UnderlineType, convertInchesToTwip, convertMillimetersToTwip, BorderStyle, Header } from "https://esm.sh/docx@8.5.0";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -35,7 +35,7 @@ serve(async (req) => {
 
     const extractedData = cvDoc.extracted_data || {};
     const templateStyle = cvDoc.cv_templates?.structure_data || {};
-    const colors = templateStyle.colors || { primary: "#0000FF", text: "#000000", secondary: "#000000" };
+    const colors = templateStyle.colors || { primary: "#000000", text: "#000000", secondary: "#000000" };
     const fonts = templateStyle.fonts || { title_font: "Arial", body_font: "Arial", title_size: "14pt", body_size: "11pt", title_weight: "bold", line_height: "1.15" };
     const spacing = templateStyle.spacing || { section_spacing: "12pt", element_spacing: "6pt", padding: "10mm", line_spacing: "1.15" };
     const sections = templateStyle.sections || [];
@@ -43,7 +43,7 @@ serve(async (req) => {
     const elementStyles = templateStyle.element_styles || {};
 
     const ptToHalfPt = (pt: string) => parseInt(pt.replace('pt', '')) * 2;
-    const colorToHex = (color: string) => color.startsWith('#') ? color.replace('#', '') : color;
+    const colorToHex = (color: string) => color.replace('#', '');
     const mmToTwip = (mm: string) => convertMillimetersToTwip(parseInt(mm.replace('mm', '')));
 
     let logoImage = null;
@@ -144,11 +144,15 @@ serve(async (req) => {
                          sectionName.toLowerCase().includes('expérience') ? extractedData.missions :
                          sectionName.toLowerCase().includes('formation') ? extractedData.education : [];
 
+      // Respecter la casse exacte du template
+      const formattedSectionName = sectionStyle.case === 'uppercase' ? sectionName.toUpperCase() :
+                                  sectionStyle.case === 'lowercase' ? sectionName.toLowerCase() : sectionName;
+
       children.push(
         new Paragraph({
           children: [
             new TextRun({ 
-              text: sectionName,
+              text: formattedSectionName,
               bold: sectionStyle.bold !== false,
               size: ptToHalfPt(sectionStyle.size || fonts.title_size),
               color: colorToHex(sectionStyle.color || colors.primary),
@@ -168,12 +172,11 @@ serve(async (req) => {
         const subcategories = extractedData.skills?.subcategories || [];
         for (const subcategory of subcategories) {
           const subcategoryStyle = elementStyles.skill_subcategories?.find((sc: any) => sc.name === subcategory.name)?.style || elementStyles.skills_label || {};
-          const items = Array.isArray(subcategory.items) ? subcategory.items.join(', ') : subcategory.items;
           children.push(
             new Paragraph({
               children: [
                 new TextRun({
-                  text: `${subcategory.name}: `,
+                  text: subcategory.name + ': ',
                   bold: subcategoryStyle.bold !== false,
                   italic: subcategoryStyle.italic || false,
                   size: ptToHalfPt(subcategoryStyle.size || fonts.body_size),
@@ -181,13 +184,12 @@ serve(async (req) => {
                   font: subcategoryStyle.font || fonts.body_font,
                 }),
                 new TextRun({
-                  text: items,
+                  text: subcategory.items.join(', '),
                   size: ptToHalfPt(elementStyles.skills_item?.size || fonts.body_size),
                   color: colorToHex(elementStyles.skills_item?.color || colors.text),
                   font: elementStyles.skills_item?.font || fonts.body_font,
                 }),
               ],
-              indent: { left: mmToTwip(visualElements.bullets?.indent || '5mm') },
               spacing: { after: ptToHalfPt(spacing.element_spacing) }
             })
           );
@@ -211,7 +213,6 @@ serve(async (req) => {
                   font: elementStyles.skills_item?.font || fonts.body_font,
                 }),
               ],
-              indent: { left: mmToTwip(visualElements.bullets?.indent || '5mm') },
               spacing: { after: ptToHalfPt(spacing.element_spacing) }
             })
           );
@@ -235,7 +236,6 @@ serve(async (req) => {
                   font: elementStyles.skills_item?.font || fonts.body_font,
                 }),
               ],
-              indent: { left: mmToTwip(visualElements.bullets?.indent || '5mm') },
               spacing: { after: ptToHalfPt(spacing.element_spacing) }
             })
           );
@@ -305,7 +305,7 @@ serve(async (req) => {
                       font: elementStyles.mission_achievement?.font || fonts.body_font,
                     }),
                   ],
-                  indent: { left: mmToTwip(visualElements.bullets?.indent || '5mm') },
+                  indent: { left: mmToTwip(visualElements.bullets?.indent || '10mm') },
                   spacing: { after: ptToHalfPt(spacing.element_spacing) }
                 })
               );
