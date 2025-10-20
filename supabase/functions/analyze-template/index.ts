@@ -257,7 +257,7 @@ async function analyzeDocxTemplate(docxData: Blob, supabase: any): Promise<any> 
       }
       
       // Detect case
-      const textMatch = runContent.match(/<w:t[^>]*>([^<]+)</w:t>/);
+      const textMatch = runContent.match(/<w:t[^>]*>([^<]+)<\/w:t>/);
       if (textMatch) {
         const text = textMatch[1];
         style.case = text === text.toUpperCase() ? 'uppercase' : text === text.toLowerCase() ? 'lowercase' : 'mixed';
