@@ -86,8 +86,8 @@ serve(async (req) => {
           let text = textMatches.map(m => m[1]).join('').trim();
           if (!text) continue;
 
-          // Supprimer les caractères de puce parasites
-          text = text.replace(/^[\•\-\*É°]\s*/, '');
+          // Nettoyage rigoureux des caractères parasites
+          text = text.replace(/^[\•\-\*É°\u2022\u25CF]\s*/g, '').replace(/\s+/g, ' ').trim();
 
           const runMatch = paraContent.match(/<w:r[^>]*>(.*?)<\/w:r>/s);
           const style: any = {};
@@ -110,7 +110,7 @@ serve(async (req) => {
       } else if (fileType === 'pdf') {
         const pdfParse = await import('https://esm.sh/pdf-parse@1.1.1');
         const data = await pdfParse.default(bytes);
-        extractedText = data.text.replace(/^[\•\-\*É°]\s*/gm, '');
+        extractedText = data.text.replace(/^[\•\-\*É°\u2022\u25CF]\s*/gm, '').replace(/\s+/g, ' ').trim();
         structuredData = extractedText.split('\n').map(line => ({
           text: line.trim(),
           style: { font: 'Unknown', size: 'Unknown', color: '#000000', bold: false, italic: false, bullet: false, case: 'mixed' }
@@ -130,7 +130,7 @@ serve(async (req) => {
     console.log('Text extracted, analyzing with AI...');
 
     const sectionNames = templateStructure.sections?.map((s: any) => s.name) || ['Compétences', 'Expérience', 'Formations & Certifications'];
-    const skillSubcategories = templateStructure.element_styles?.skill_subcategories?.map((sc: any) => sc.name) || [];
+    const skillSubcategories = templateStructure.element_styles?.skill_subcategories?.map((sc: any) => sc.name) || ['Langage/BDD', 'OS', 'Outils', 'Méthodologies'];
     const hasCommercialContact = templateStructure.element_styles?.commercial_contact?.position === 'header';
 
     const sectionSynonyms = {
@@ -150,10 +150,11 @@ serve(async (req) => {
    - Expérience : ${sectionSynonyms['Expérience'].join(', ')}
    - Formations & Certifications : ${sectionSynonyms['Formations & Certifications'].join(', ')}
    Mappe les sections du CV d'entrée (ex. : Formation, Diplôme, ETUDES) vers les noms du template (ex. : Formations & Certifications).
-4. Extraire les sous-catégories de compétences (${skillSubcategories.join(', ') || 'aucune'}) avec leurs items séparés par des virgules, SANS puces ni sauts de ligne.
+4. Extraire les sous-catégories de compétences (${skillSubcategories.join(', ') || 'aucune'}) avec leurs items séparés par des virgules, SANS puces ni sauts de ligne. Exemple : "Langage/BDD: Spark, Hive, Hadoop".
 5. Inclure un placeholder pour les coordonnées commerciales si présentes dans l'en-tête du template.
-6. Supprimer tout caractère parasite comme 'É', '•', ou autres devant les compétences.
-7. Extraire les projets, compétences, formations et missions professionnelles.
+6. Supprimer tout caractère parasite comme 'É', '•', '°', ou autres devant les compétences.
+7. Regrouper les compétences par sous-catégories définies dans le template (${skillSubcategories.join(', ')}).
+8. Extraire les projets, compétences, formations et missions professionnelles.
 
 Retourne un JSON avec cette structure EXACTE :
 {
@@ -184,7 +185,7 @@ Retourne un JSON avec cette structure EXACTE :
     "subcategories": [
       {
         "name": "nom de la sous-catégorie (ex: Langage/BDD)",
-        "items": ["compétence1", "compétence2"]
+        "items": ["compétence1, compétence2"]
       }
     ],
     "languages": ["langue1: niveau", "langue2: niveau"],
