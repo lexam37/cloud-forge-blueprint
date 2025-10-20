@@ -1,6 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.75.0";
-import { Document, Packer, Paragraph, TextRun, AlignmentType, ImageRun, UnderlineType, convertInchesToTwip, convertMillimetersToTwip, BorderStyle, Header } from "https://esm.sh/docx@8.5.0";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { Document, Packer, Paragraph, TextRun, AlignmentType, ImageRun, UnderlineType, convertMillimetersToTwip } from "https://esm.sh/docx@8.5.0";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -14,10 +14,7 @@ serve(async (req) => {
 
   try {
     const { cvDocumentId } = await req.json();
-    
-    if (!cvDocumentId) {
-      throw new Error('cvDocumentId is required');
-    }
+    if (!cvDocumentId) throw new Error('cvDocumentId is required');
 
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
     const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -29,16 +26,21 @@ serve(async (req) => {
       .eq('id', cvDocumentId)
       .single();
 
-    if (cvError || !cvDoc) {
-      throw new Error('CV document not found');
-    }
+    if (cvError || !cvDoc) throw new Error('CV document not found');
 
     const extractedData = cvDoc.extracted_data || {};
     const templateStyle = cvDoc.cv_templates?.structure_data || {};
-    const colors = templateStyle.colors || { primary: "#0000FF", text: "#000000", secondary: "#000000" }; // Bleu par défaut
+    console.log('ExtractedData:', JSON.stringify(extractedData, null, 2));
+    console.log('TemplateStyle:', JSON.stringify(templateStyle, null, 2));
+
+    const colors = templateStyle.colors || { primary: "#0000FF", text: "#000000", secondary: "#000000" };
     const fonts = templateStyle.fonts || { title_font: "Arial", body_font: "Arial", title_size: "14pt", body_size: "11pt", title_weight: "bold", line_height: "1.15" };
     const spacing = templateStyle.spacing || { section_spacing: "12pt", element_spacing: "6pt", padding: "10mm", line_spacing: "1.15" };
-    const sections = templateStyle.sections || [];
+    const sections = templateStyle.sections || [
+      { name: "Compétences", title_style: { color: "#0000FF", size: "14pt", bold: true, case: "mixed" } },
+      { name: "Expérience", title_style: { color: "#0000FF", size: "14pt", bold: true, case: "mixed" } },
+      { name: "Formations & Certifications", title_style: { color: "#0000FF", size: "14pt", bold: true, case: "mixed" } }
+    ];
     const visualElements = templateStyle.visual_elements || {};
     const elementStyles = templateStyle.element_styles || {};
 
@@ -63,7 +65,6 @@ serve(async (req) => {
     const children = [];
     const headers = [];
 
-    // Coordonnées commerciales dans l'en-tête
     if (extractedData.commercial_contact?.enabled) {
       const contactStyle = elementStyles.commercial_contact || {};
       headers.push(
@@ -83,7 +84,6 @@ serve(async (req) => {
       );
     }
 
-    // Logo dans l'en-tête
     if (logoImage && visualElements.logo?.position === 'header') {
       const widthPoints = (visualElements.logo.width_emu / 914400) * 72;
       const heightPoints = (visualElements.logo.height_emu / 914400) * 72;
@@ -103,7 +103,6 @@ serve(async (req) => {
       );
     }
 
-    // Trigramme et titre
     const trigram = extractedData.personal?.trigram || 'XXX';
     const title = extractedData.personal?.title || '';
     children.push(
@@ -136,22 +135,21 @@ serve(async (req) => {
       new Paragraph({ text: '' })
     );
 
-    // Sections dynamiques
+    console.log('Sections to process:', sections);
     for (const section of sections) {
       const sectionName = section.name;
-      const sectionStyle = section.title_style || {};
+      const sectionStyle = section.title_style || { color: "#0000FF", size: "14pt", bold: true };
       const sectionData = sectionName.toLowerCase().includes('compétence') ? extractedData.skills :
                          sectionName.toLowerCase().includes('expérience') ? extractedData.missions :
                          sectionName.toLowerCase().includes('formation') ? extractedData.education : [];
 
-      // Respecter la casse exacte du template
-      const formattedSectionName = section.name; // Utiliser le nom exact du template
+      console.log(`Processing section: ${sectionName}`, JSON.stringify(sectionData, null, 2));
 
       children.push(
         new Paragraph({
           children: [
             new TextRun({ 
-              text: formattedSectionName,
+              text: sectionName,
               bold: sectionStyle.bold !== false,
               size: ptToHalfPt(sectionStyle.size || fonts.title_size),
               color: colorToHex(sectionStyle.color || colors.primary),
@@ -169,8 +167,10 @@ serve(async (req) => {
 
       if (sectionName.toLowerCase().includes('compétence')) {
         const subcategories = extractedData.skills?.subcategories || [];
+        console.log('Skills subcategories:', subcategories);
         for (const subcategory of subcategories) {
           const subcategoryStyle = elementStyles.skill_subcategories?.find((sc: any) => sc.name === subcategory.name)?.style || elementStyles.skills_label || {};
+          const items = Array.isArray(subcategory.items) ? subcategory.items.join(', ') : subcategory.items;
           children.push(
             new Paragraph({
               children: [
@@ -183,7 +183,7 @@ serve(async (req) => {
                   font: subcategoryStyle.font || fonts.body_font,
                 }),
                 new TextRun({
-                  text: subcategory.items.join(', '),
+                  text: items,
                   size: ptToHalfPt(elementStyles.skills_item?.size || fonts.body_size),
                   color: colorToHex(elementStyles.skills_item?.color || colors.text),
                   font: elementStyles.skills_item?.font || fonts.body_font,
@@ -371,6 +371,8 @@ serve(async (req) => {
       }
       children.push(new Paragraph({ text: '' }));
     }
+
+    console.log('Children length:', children.length);
 
     const doc = new Document({
       sections: [{
