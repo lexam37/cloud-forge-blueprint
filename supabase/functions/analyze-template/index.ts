@@ -1,6 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { docx4js } from "https://esm.sh/docx4js@3.2.7";
+import { JSZip } from "https://esm.sh/jszip@3.10.1";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -13,53 +13,64 @@ const sectionKeywords = {
   'Formations & Certifications': ['formation', 'formations', 'certification', 'certifications', 'diplôme', 'diplome', 'education', 'études', 'etudes', 'study', 'studies']
 };
 
-function extractStyle(run: any) {
+function extractStyle(runContent: string) {
   const style: any = {};
-  const font = run.find('w\\:rFonts').attr('w:ascii');
-  if (font) style.font = font;
-  const size = run.find('w\\:sz').attr('w:val');
-  if (size) style.size = `${parseInt(size) / 2}pt`;
-  const color = run.find('w\\:color').attr('w:val');
-  if (color && color !== 'auto') style.color = `#${color}`;
-  style.bold = !!run.find('w\\:b').length;
-  style.italic = !!run.find('w\\:i').length;
+  const fontMatch = runContent.match(/<w:rFonts[^>]+w:ascii="([^"]+)"/);
+  if (fontMatch) style.font = fontMatch[1];
+  const sizeMatch = runContent.match(/<w:sz[^>]+w:val="(\d+)"/);
+  if (sizeMatch) style.size = `${parseInt(sizeMatch[1]) / 2}pt`;
+  const colorMatch = runContent.match(/<w:color[^>]+w:val="([^"]+)"/);
+  if (colorMatch && colorMatch[1] !== 'auto') style.color = `#${colorMatch[1]}`;
+  style.bold = /<w:b[\/\s>]/.test(runContent);
+  style.italic = /<w:i[\/\s>]/.test(runContent);
   return style;
 }
 
-function extractParagraph(para: any) {
+function extractParagraph(paraContent: string) {
   const paragraph: any = {};
-  const align = para.find('w\\:jc').attr('w:val');
-  if (align) paragraph.alignment = align;
-  const spacingBefore = para.find('w\\:spacing').attr('w:before');
-  if (spacingBefore) paragraph.spacingBefore = `${parseInt(spacingBefore) / 20}pt`;
-  const spacingAfter = para.find('w\\:spacing').attr('w:after');
-  if (spacingAfter) paragraph.spacingAfter = `${parseInt(spacingAfter) / 20}pt`;
+  const alignMatch = paraContent.match(/<w:jc[^>]+w:val="([^"]+)"/);
+  if (alignMatch) paragraph.alignment = alignMatch[1];
+  const spacingBeforeMatch = paraContent.match(/<w:spacing[^>]+w:before="(\d+)"/);
+  if (spacingBeforeMatch) paragraph.spacingBefore = `${parseInt(spacingBeforeMatch[1]) / 20}pt`;
+  const spacingAfterMatch = paraContent.match(/<w:spacing[^>]+w:after="(\d+)"/);
+  if (spacingAfterMatch) paragraph.spacingAfter = `${parseInt(spacingAfterMatch[1]) / 20}pt`;
   return paragraph;
 }
 
-async function analyzeDocxTemplate(doc: any, templateId: string, supabase: any) {
+async function analyzeDocxTemplate(zip: any, templateId: string, supabase: any) {
+  const documentXml = await zip.file('word/document.xml')?.async('text');
+  const headerXml = await zip.file('word/header1.xml')?.async('text');
+  const footerXml = await zip.file('word/footer1.xml')?.async('text');
+
+  if (!documentXml) throw new Error('document.xml not found');
+
+  const paragraphs = Array.from(documentXml.matchAll(/<w:p[^>]*>(.*?)<\/w:p>/gs));
   const allColors = new Set<string>();
   const styles: any = {};
   const sections: any[] = [];
   const visualElements: any = {};
   let currentSection: string | null = null;
 
-  const paragraphs = doc.officeDocument.content('w\\:p');
   for (let i = 0; i < paragraphs.length; i++) {
-    const para = paragraphs[i];
-    const text = para.text().trim();
+    const paraContent = paragraphs[i][1];
+    const textMatches = Array.from(paraContent.matchAll(/<w:t[^>]*>([^<]+)<\/w:t>/g));
+    const text = textMatches.map(m => m[1]).join('').trim();
+    
     if (!text || text.length < 2) continue;
-
-    const style = extractStyle(para.find('w\\:r').first());
-    const paragraph = extractParagraph(para);
+    
+    const runMatch = paraContent.match(/<w:r[^>]*>(.*?)<\/w:r>/s);
+    if (!runMatch) continue;
+    
+    const style = extractStyle(runMatch[1]);
+    const paragraph = extractParagraph(paraContent);
     
     if (style.color && style.color !== '#000000') allColors.add(style.color);
     
     const textLower = text.toLowerCase();
-    const position = doc.officeDocument.header ? 'header' : doc.officeDocument.footer ? 'footer' : 'body';
+    const position = headerXml?.includes(paraContent) ? 'header' : footerXml?.includes(paraContent) ? 'footer' : 'body';
     
     // Détection des coordonnées commerciales
-    if (position === 'header' && text.match(/contact\s*(commercial|professionnel)/i)) {
+    if (headerXml && text.match(/contact\s*(commercial|professionnel)/i)) {
       styles.commercial_contact = { ...style, paragraph, position, text };
     }
     
@@ -70,7 +81,7 @@ async function analyzeDocxTemplate(doc: any, templateId: string, supabase: any) 
         currentSection = sectionKey;
         styles[`section_${sectionKey}`] = { ...style, paragraph, position, text };
         sections.push({
-          name: sectionKey,
+          name: text, // Conserver la casse exacte
           position,
           title_style: { ...style, case: text === text.toUpperCase() ? 'uppercase' : text === text.toLowerCase() ? 'lowercase' : 'mixed' },
           spacing: { top: paragraph.spacingBefore || "10mm", bottom: paragraph.spacingAfter || "5mm" },
@@ -90,11 +101,12 @@ async function analyzeDocxTemplate(doc: any, templateId: string, supabase: any) 
       }
     }
     
-    // Détection du logo
-    if (para.find('w\\:drawing').length || para.find('w\\:pict').length) {
+    // Détection du logo (simplifiée, ajustez selon votre logique)
+    if (paraContent.includes('<w:drawing') || paraContent.includes('<w:pict')) {
       visualElements.logo = {
-        position,
+        position: position,
         alignment: paragraph.alignment || 'left',
+        // Placeholder pour les dimensions, ajustez si nécessaire
         width_emu: 1000000,
         height_emu: 500000
       };
@@ -103,7 +115,7 @@ async function analyzeDocxTemplate(doc: any, templateId: string, supabase: any) 
 
   const structureData = {
     colors: {
-      primary: Array.from(allColors)[0] || '#0000FF',
+      primary: Array.from(allColors)[0] || '#0000FF', // Bleu par défaut
       text: '#000000',
       secondary: Array.from(allColors)[1] || '#000000'
     },
@@ -170,9 +182,9 @@ serve(async (req) => {
     }
 
     const arrayBuffer = await templateFileData.arrayBuffer();
-    const doc = await docx4js.load(arrayBuffer);
+    const zip = await JSZip.loadAsync(arrayBuffer);
 
-    const structureData = await analyzeDocxTemplate(doc, templateId, supabase);
+    const structureData = await analyzeDocxTemplate(zip, templateId, supabase);
 
     return new Response(
       JSON.stringify({ success: true, templateId, structureData }),
