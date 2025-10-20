@@ -396,16 +396,32 @@ async function analyzeDocxTemplate(docxData: Blob, supabase: any): Promise<any> 
       if (style.color !== '#000000') allColors.add(style.color);
       
       const textUpper = text.toUpperCase();
-      const position = headerXml && paraContent.includes(headerXml) ? 'header' : footerXml && paraContent.includes(footerXml) ? 'footer' : 'body';
+      const position = headerXml?.includes(paraContent) ? 'header' : footerXml?.includes(paraContent) ? 'footer' : 'body';
+      
       
       // Title/Métier (large font, centered or bold, often first non-header paragraph)
       if (!styles.title && style.size >= '14pt' && (paragraph.alignment === 'center' || style.bold) && isFirstPage) {
         styles.title = { ...style, paragraph, position, text };
       }
       
-      // Commercial contact (email/phone pattern in header or body)
-      if (!styles.commercial_contact && text.match(/[\w\.-]+@[\w\.-]+\.\w+|\+\d{10,}|\d{2}\s?\d{2}\s?\d{2}\s?\d{2}\s?\d{2}/)) {
-        styles.commercial_contact = { ...style, paragraph, position, text };
+      // Commercial contact - extraction depuis le template (email/phone dans header ou body)
+      if (!styles.commercial_contact && text.match(/[\w\.-]+@[\w\.-]+\.\w+|\+?\d{10,}|\d{2}\s?\d{2}\s?\d{2}\s?\d{2}\s?\d{2}/)) {
+        const emailMatch = text.match(/([\w\.-]+@[\w\.-]+\.\w+)/);
+        const phoneMatch = text.match(/(\+?\d{2}\s?\d{2}\s?\d{2}\s?\d{2}\s?\d{2}|\+?\d{10,})/);
+        
+        // Extraire nom et prénom si présents (souvent avant ou dans le même paragraphe)
+        const nameMatch = text.match(/([A-Z][a-zéèêà]+)\s+([A-Z][A-ZÉÈÊÀ]+)/);
+        
+        styles.commercial_contact = { 
+          ...style, 
+          paragraph, 
+          position, 
+          text,
+          email: emailMatch ? emailMatch[1] : null,
+          phone: phoneMatch ? phoneMatch[1] : null,
+          first_name: nameMatch ? nameMatch[1] : null,
+          last_name: nameMatch ? nameMatch[2] : null
+        };
       }
       
       // Trigram (3 letters, uppercase)
@@ -532,7 +548,15 @@ async function analyzeDocxTemplate(docxData: Blob, supabase: any): Promise<any> 
         }
       ],
       element_styles: {
-        commercial_contact: styles.commercial_contact || { ...bodyStyle, position: 'header', text: '' },
+        commercial_contact: styles.commercial_contact || { 
+          ...bodyStyle, 
+          position: 'header', 
+          text: '',
+          email: null,
+          phone: null,
+          first_name: null,
+          last_name: null
+        },
         trigram: styles.trigram || { ...bodyStyle, color: primaryColor, bold: true, text: '' },
         title: styles.title || { ...titleStyle, text: '' },
         section_competences: styles.section_competences || titleStyle,

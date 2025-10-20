@@ -2,10 +2,9 @@ import { useState } from "react";
 import { FileUploadSection } from "@/components/dashboard/FileUploadSection";
 import { TemplateManagement } from "@/components/dashboard/TemplateManagement";
 import { CVHistoryList } from "@/components/dashboard/CVHistoryList";
-import { CommercialProfile } from "@/components/dashboard/CommercialProfile";
 import Header from "@/components/Header";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Upload, History, FileText, User } from "lucide-react";
+import { Upload, History, FileText } from "lucide-react";
 
 const Dashboard = () => {
   const [refreshKey, setRefreshKey] = useState(0);
@@ -25,7 +24,7 @@ const Dashboard = () => {
         </div>
 
         <Tabs defaultValue="upload" className="w-full">
-          <TabsList className="grid w-full max-w-2xl grid-cols-4">
+          <TabsList className="grid w-full max-w-2xl grid-cols-3">
             <TabsTrigger value="upload" className="flex items-center gap-2">
               <Upload className="w-4 h-4" />
               <span className="hidden sm:inline">Upload CV</span>
@@ -37,10 +36,6 @@ const Dashboard = () => {
             <TabsTrigger value="templates" className="flex items-center gap-2">
               <FileText className="w-4 h-4" />
               <span className="hidden sm:inline">Templates</span>
-            </TabsTrigger>
-            <TabsTrigger value="profile" className="flex items-center gap-2">
-              <User className="w-4 h-4" />
-              <span className="hidden sm:inline">Profil</span>
             </TabsTrigger>
           </TabsList>
 
@@ -54,10 +49,6 @@ const Dashboard = () => {
 
           <TabsContent value="templates" className="mt-6">
             <TemplateManagement />
-          </TabsContent>
-
-          <TabsContent value="profile" className="mt-6">
-            <CommercialProfile />
           </TabsContent>
         </Tabs>
       </main>

@@ -33,15 +33,6 @@ serve(async (req) => {
       throw new Error('CV document not found');
     }
 
-    // Récupérer le profil commercial
-    const { data: commercial, error: commercialError } = await supabase
-      .from('commercial_profiles')
-      .select('*')
-      .eq('is_active', true)
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
     // Récupérer le template actif
     const { data: template, error: templateError } = await supabase
       .from('cv_templates')
@@ -51,7 +42,6 @@ serve(async (req) => {
       .maybeSingle();
 
     console.log('CV data:', cvDoc.extracted_data);
-    console.log('Commercial:', commercial);
     console.log('Template:', template);
 
     // Importer la bibliothèque docx pour générer le document
@@ -89,6 +79,15 @@ serve(async (req) => {
     const visualElements = templateStyle.visual_elements || {};
     const pageSettings = templateStyle.page || {};
     
+    // Récupérer les informations du commercial depuis le template
+    const commercialContactStyle = templateStyle.element_styles?.commercial_contact || {};
+    const commercialData = {
+      first_name: commercialContactStyle.first_name || '',
+      last_name: commercialContactStyle.last_name || '',
+      email: commercialContactStyle.email || '',
+      phone: commercialContactStyle.phone || ''
+    };
+    
     // Helpers pour convertir les valeurs
     const ptToHalfPt = (pt: string) => parseInt(pt) * 2;
     const colorToHex = (color: string) => color.replace('#', '');
@@ -98,8 +97,8 @@ serve(async (req) => {
     let logoImage = null;
     const logoSettings = visualElements.logo || {};
     
-    // Essayer d'abord le logo extrait du template
-    const logoPath = template?.structure_data?.visual_elements?.logo?.extracted_logo_path || commercial?.logo_path;
+    // Utiliser uniquement le logo extrait du template
+    const logoPath = template?.structure_data?.visual_elements?.logo?.extracted_logo_path;
     
     if (logoPath) {
       try {
@@ -167,15 +166,15 @@ serve(async (req) => {
         );
       }
       
-      // Ajouter les coordonnées commerciales dans l'en-tête
-      if (commercial && hasCommercialInHeader) {
+      // Ajouter les coordonnées commerciales dans l'en-tête si elles existent et si la position est 'header'
+      if (commercialData.email && commercialData.phone && hasCommercialInHeader) {
         const contactStyle = templateStyle.element_styles?.commercial_contact || {};
         headerChildren.push(
           new Paragraph({
             children: [
               new TextRun({ 
                 text: 'Contact Commercial',
-                bold: true,
+                bold: contactStyle.bold !== false,
                 size: ptToHalfPt(contactStyle.size || fonts.body_size),
                 color: colorToHex(contactStyle.color || colors.text),
                 font: contactStyle.font || fonts.body_font,
@@ -186,7 +185,8 @@ serve(async (req) => {
           new Paragraph({
             children: [
               new TextRun({ 
-                text: `${commercial.first_name} ${commercial.last_name}`,
+                text: `${commercialData.first_name} ${commercialData.last_name}`,
+                bold: contactStyle.bold || false,
                 size: ptToHalfPt(contactStyle.size || fonts.body_size),
                 color: colorToHex(contactStyle.color || colors.text),
                 font: contactStyle.font || fonts.body_font,
@@ -196,7 +196,7 @@ serve(async (req) => {
           new Paragraph({
             children: [
               new TextRun({ 
-                text: commercial.email,
+                text: commercialData.email,
                 size: ptToHalfPt(contactStyle.size || fonts.body_size),
                 color: colorToHex(contactStyle.color || colors.text),
                 font: contactStyle.font || fonts.body_font,
@@ -206,7 +206,7 @@ serve(async (req) => {
           new Paragraph({
             children: [
               new TextRun({ 
-                text: commercial.phone,
+                text: commercialData.phone,
                 size: ptToHalfPt(contactStyle.size || fonts.body_size),
                 color: colorToHex(contactStyle.color || colors.text),
                 font: contactStyle.font || fonts.body_font,
@@ -291,8 +291,8 @@ serve(async (req) => {
       );
     }
 
-    // Coordonnées du commercial (seulement si pas dans l'en-tête)
-    if (commercial && !hasCommercialInHeader) {
+    // Coordonnées du commercial (seulement si pas dans l'en-tête et si elles existent)
+    if (commercialData.email && commercialData.phone && !hasCommercialInHeader) {
       const contactStyle = templateStyle.element_styles?.commercial_contact || {};
       children.push(
         createSectionTitle('Contact Commercial'),
@@ -305,7 +305,7 @@ serve(async (req) => {
             font: contactStyle.font || fonts.body_font,
           }),
           new TextRun({ 
-            text: `${commercial.first_name} ${commercial.last_name}`,
+            text: `${commercialData.first_name} ${commercialData.last_name}`,
             size: ptToHalfPt(contactStyle.size || fonts.body_size),
             color: colorToHex(contactStyle.color || colors.text),
             font: contactStyle.font || fonts.body_font,
@@ -320,7 +320,7 @@ serve(async (req) => {
             font: contactStyle.font || fonts.body_font,
           }),
           new TextRun({ 
-            text: commercial.email,
+            text: commercialData.email,
             size: ptToHalfPt(contactStyle.size || fonts.body_size),
             color: colorToHex(contactStyle.color || colors.text),
             font: contactStyle.font || fonts.body_font,
@@ -335,7 +335,7 @@ serve(async (req) => {
             font: contactStyle.font || fonts.body_font,
           }),
           new TextRun({ 
-            text: commercial.phone,
+            text: commercialData.phone,
             size: ptToHalfPt(contactStyle.size || fonts.body_size),
             color: colorToHex(contactStyle.color || colors.text),
             font: contactStyle.font || fonts.body_font,
