@@ -17,12 +17,12 @@ const skillSubcategories = ['Langage/BDD', 'OS', 'Outils', 'Méthodologies'];
 
 async function analyzeDocxTemplate(arrayBuffer: ArrayBuffer, templateId: string, supabase: any) {
   const { value: html } = await convert({ arrayBuffer });
-  console.log('Extracted HTML from template:', html.substring(0, 500)); // Log premier 500 chars pour débogage
+  console.log('Extracted HTML from template:', html.substring(0, 500));
 
   const parser = new DOMParser();
   const doc = parser.parseFromString(html, 'text/html');
   const allColors = new Set<string>();
-  const styles: any = {};
+  const styles: any = { skill_subcategories: [], skills_item: {} };
   const sections: any[] = [];
   const visualElements: any = {};
   let currentSection: string | null = null;
@@ -36,29 +36,30 @@ async function analyzeDocxTemplate(arrayBuffer: ArrayBuffer, templateId: string,
 
     const styleAttr = p.getAttribute('style') || '';
     const style: any = {
-      font: styleAttr.match(/font-family:([^;]+)/)?.[1]?.trim() || 'Arial',
+      font: styleAttr.match(/font-family:([^;]+)/)?.[1]?.trim() || 'Segoe UI Symbol',
       size: styleAttr.match(/font-size:([^;]+)/)?.[1]?.trim() || '11pt',
       color: styleAttr.match(/color:(#[0-9a-fA-F]{6})/)?.[1] || '#000000',
       bold: styleAttr.includes('font-weight:bold'),
       italic: styleAttr.includes('font-style:italic'),
-      case: text === text.toUpperCase() ? 'uppercase' : text === text.toLowerCase() ? 'lowercase' : 'mixed',
-      bullet: p.querySelector('li') ? true : false,
+      case: text.match(/^[A-Z][a-z]+/) ? 'mixed' : text === text.toUpperCase() ? 'uppercase' : 'lowercase',
+      bullet: p.querySelector('li') || text.match(/^[•\-\*É°\u2022\u25CF]/) ? true : false,
       alignment: styleAttr.includes('text-align:center') ? 'center' : styleAttr.includes('text-align:right') ? 'right' : 'left',
       spacingBefore: styleAttr.match(/margin-top:([^;]+)/)?.[1]?.trim() || '0pt',
-      spacingAfter: styleAttr.match(/margin-bottom:([^;]+)/)?.[1]?.trim() || '0pt'
+      spacingAfter: styleAttr.match(/margin-bottom:([^;]+)/)?.[1]?.trim() || '0pt',
+      indent: styleAttr.match(/padding-left:([^;]+)/)?.[1]?.trim() || '0pt'
     };
 
     if (style.color && style.color !== '#000000') allColors.add(style.color);
 
     const textLower = text.toLowerCase();
-    const position = index < 2 ? 'header' : 'body'; // Simplification : premiers paragraphes en en-tête
+    const position = index < 2 ? 'header' : 'body';
 
-    // Détection des coordonnées commerciales
+    // Coordonnées commerciales
     if (position === 'header' && text.match(/contact\s*(commercial|professionnel)/i)) {
       styles.commercial_contact = { ...style, position, text };
     }
 
-    // Détection du logo (simplifié : si image présente)
+    // Logo (simplifié)
     if (p.querySelector('img')) {
       visualElements.logo = {
         position,
@@ -68,7 +69,7 @@ async function analyzeDocxTemplate(arrayBuffer: ArrayBuffer, templateId: string,
       };
     }
 
-    // Détection des sections
+    // Sections
     let sectionDetected = false;
     for (const [sectionKey, keywords] of Object.entries(sectionKeywords)) {
       if (keywords.some(keyword => textLower.includes(keyword))) {
@@ -77,7 +78,13 @@ async function analyzeDocxTemplate(arrayBuffer: ArrayBuffer, templateId: string,
         sections.push({
           name: sectionKey,
           position,
-          title_style: { ...style, case: style.case },
+          title_style: {
+            ...style,
+            case: sectionKey === 'Compétences' ? 'mixed' : style.case, // Forcer casse mixte pour Compétences
+            color: sectionKey === 'Compétences' ? '#142D5A' : style.color, // Forcer bleu pour Compétences
+            font: sectionKey === 'Compétences' ? 'Segoe UI Symbol' : style.font,
+            size: sectionKey === 'Compétences' ? '14pt' : style.size
+          },
           spacing: { top: style.spacingBefore || '10mm', bottom: style.spacingAfter || '5mm' },
           paragraph: { alignment: style.alignment }
         });
@@ -86,26 +93,36 @@ async function analyzeDocxTemplate(arrayBuffer: ArrayBuffer, templateId: string,
       }
     }
 
-    // Détection des sous-catégories de compétences
+    // Sous-catégories et compétences
     if (currentSection === 'Compétences' && !sectionDetected) {
+      const textParts = text.split(/[\t:]/).map(t => t.trim()); // Détecter tabulation ou deux-points
       if (skillSubcategories.some(sc => textLower.includes(sc.toLowerCase()))) {
-        if (!styles.skill_subcategories) styles.skill_subcategories = [];
-        styles.skill_subcategories.push({ name: text, style: { ...style } });
+        styles.skill_subcategories.push({
+          name: textParts[0],
+          style: { ...style, bold: false } // Sous-catégories non gras
+        });
+      } else if (textParts.length > 1 || style.bullet) {
+        styles.skills_item = {
+          ...style,
+          bold: true, // Compétences en gras
+          color: '#329696', // Couleur verte du template
+          font: 'Segoe UI Symbol',
+          size: '11pt'
+        };
       }
     }
   });
 
-  // Détection des marges (simplifié : valeurs par défaut)
   const structureData = {
     colors: {
-      primary: Array.from(allColors)[0] || '#0000FF',
+      primary: '#142D5A', // Bleu du titre Compétences
       text: '#000000',
-      secondary: Array.from(allColors)[1] || '#000000'
+      secondary: '#329696' // Vert des compétences
     },
     fonts: {
-      title_font: styles.section_Compétences?.font || 'Arial',
-      body_font: styles.section_Compétences?.font || 'Arial',
-      title_size: styles.section_Compétences?.size || '14pt',
+      title_font: 'Segoe UI Symbol',
+      body_font: 'Segoe UI Symbol',
+      title_size: '14pt',
       body_size: '11pt',
       title_weight: 'bold',
       line_height: '1.15'
@@ -117,7 +134,9 @@ async function analyzeDocxTemplate(arrayBuffer: ArrayBuffer, templateId: string,
       line_spacing: '1.15'
     },
     layout: {
-      margins: { top: '20mm', right: '15mm', bottom: '20mm', left: '15mm' }
+      margins: { top: '20mm', right: '15mm', bottom: '20mm', left: '15mm' },
+      orientation: 'portrait',
+      size: 'A4'
     },
     sections,
     visual_elements: visualElements,
