@@ -144,11 +144,15 @@ serve(async (req) => {
                          sectionName.toLowerCase().includes('expérience') ? extractedData.missions :
                          sectionName.toLowerCase().includes('formation') ? extractedData.education : [];
 
+      // Respecter la casse exacte du template
+      const formattedSectionName = sectionStyle.case === 'uppercase' ? sectionName.toUpperCase() :
+                                  sectionStyle.case === 'lowercase' ? sectionName.toLowerCase() : sectionName;
+
       children.push(
         new Paragraph({
           children: [
             new TextRun({ 
-              text: sectionName,
+              text: formattedSectionName,
               bold: sectionStyle.bold !== false,
               size: ptToHalfPt(sectionStyle.size || fonts.title_size),
               color: colorToHex(sectionStyle.color || colors.primary),
@@ -172,18 +176,13 @@ serve(async (req) => {
             new Paragraph({
               children: [
                 new TextRun({
-                  text: subcategory.name,
+                  text: subcategory.name + ': ',
                   bold: subcategoryStyle.bold !== false,
                   italic: subcategoryStyle.italic || false,
                   size: ptToHalfPt(subcategoryStyle.size || fonts.body_size),
                   color: colorToHex(subcategoryStyle.color || colors.text),
                   font: subcategoryStyle.font || fonts.body_font,
                 }),
-              ],
-              spacing: { after: ptToHalfPt(spacing.element_spacing) }
-            }),
-            new Paragraph({
-              children: [
                 new TextRun({
                   text: subcategory.items.join(', '),
                   size: ptToHalfPt(elementStyles.skills_item?.size || fonts.body_size),
@@ -191,7 +190,6 @@ serve(async (req) => {
                   font: elementStyles.skills_item?.font || fonts.body_font,
                 }),
               ],
-              indent: { left: mmToTwip(visualElements.bullets?.indent || '10mm') },
               spacing: { after: ptToHalfPt(spacing.element_spacing) }
             })
           );
@@ -201,18 +199,13 @@ serve(async (req) => {
             new Paragraph({
               children: [
                 new TextRun({
-                  text: 'Langues',
+                  text: 'Langues: ',
                   bold: elementStyles.skills_label?.bold !== false,
                   italic: elementStyles.skills_label?.italic || false,
                   size: ptToHalfPt(elementStyles.skills_label?.size || fonts.body_size),
                   color: colorToHex(elementStyles.skills_label?.color || colors.text),
                   font: elementStyles.skills_label?.font || fonts.body_font,
                 }),
-              ],
-              spacing: { after: ptToHalfPt(spacing.element_spacing) }
-            }),
-            new Paragraph({
-              children: [
                 new TextRun({
                   text: extractedData.skills.languages.join(', '),
                   size: ptToHalfPt(elementStyles.skills_item?.size || fonts.body_size),
@@ -220,7 +213,6 @@ serve(async (req) => {
                   font: elementStyles.skills_item?.font || fonts.body_font,
                 }),
               ],
-              indent: { left: mmToTwip(visualElements.bullets?.indent || '10mm') },
               spacing: { after: ptToHalfPt(spacing.element_spacing) }
             })
           );
@@ -230,18 +222,13 @@ serve(async (req) => {
             new Paragraph({
               children: [
                 new TextRun({
-                  text: 'Certifications',
+                  text: 'Certifications: ',
                   bold: elementStyles.skills_label?.bold !== false,
                   italic: elementStyles.skills_label?.italic || false,
                   size: ptToHalfPt(elementStyles.skills_label?.size || fonts.body_size),
                   color: colorToHex(elementStyles.skills_label?.color || colors.text),
                   font: elementStyles.skills_label?.font || fonts.body_font,
                 }),
-              ],
-              spacing: { after: ptToHalfPt(spacing.element_spacing) }
-            }),
-            new Paragraph({
-              children: [
                 new TextRun({
                   text: extractedData.skills.certifications.join(', '),
                   size: ptToHalfPt(elementStyles.skills_item?.size || fonts.body_size),
@@ -249,7 +236,6 @@ serve(async (req) => {
                   font: elementStyles.skills_item?.font || fonts.body_font,
                 }),
               ],
-              indent: { left: mmToTwip(visualElements.bullets?.indent || '10mm') },
               spacing: { after: ptToHalfPt(spacing.element_spacing) }
             })
           );
