@@ -86,8 +86,8 @@ serve(async (req) => {
           let text = textMatches.map(m => m[1]).join('').trim();
           if (!text) continue;
 
-          // Supprimer les caractères de puce parasites (ex. : É)
-          text = text.replace(/^[\•\-\*É]\s*/, '');
+          // Supprimer les caractères de puce parasites
+          text = text.replace(/^[\•\-\*É°]\s*/, '');
 
           const runMatch = paraContent.match(/<w:r[^>]*>(.*?)<\/w:r>/s);
           const style: any = {};
@@ -100,6 +100,7 @@ serve(async (req) => {
             if (colorMatch && colorMatch[1] !== 'auto') style.color = `#${colorMatch[1]}`;
             style.bold = /<w:b[\/\s>]/.test(runMatch[1]);
             style.italic = /<w:i[\/\s>]/.test(runMatch[1]);
+            style.case = text === text.toUpperCase() ? 'uppercase' : text === text.toLowerCase() ? 'lowercase' : 'mixed';
           }
           style.bullet = paraContent.match(/<w:numPr>/) ? true : false;
 
@@ -109,10 +110,10 @@ serve(async (req) => {
       } else if (fileType === 'pdf') {
         const pdfParse = await import('https://esm.sh/pdf-parse@1.1.1');
         const data = await pdfParse.default(bytes);
-        extractedText = data.text.replace(/^[\•\-\*É]\s*/gm, '');
+        extractedText = data.text.replace(/^[\•\-\*É°]\s*/gm, '');
         structuredData = extractedText.split('\n').map(line => ({
           text: line.trim(),
-          style: { font: 'Unknown', size: 'Unknown', color: '#000000', bold: false, italic: false, bullet: false }
+          style: { font: 'Unknown', size: 'Unknown', color: '#000000', bold: false, italic: false, bullet: false, case: 'mixed' }
         }));
       } else {
         throw new Error(`Unsupported file type: ${fileType}`);
@@ -132,17 +133,27 @@ serve(async (req) => {
     const skillSubcategories = templateStructure.element_styles?.skill_subcategories?.map((sc: any) => sc.name) || [];
     const hasCommercialContact = templateStructure.element_styles?.commercial_contact?.position === 'header';
 
+    const sectionSynonyms = {
+      'Compétences': ['compétence', 'competence', 'skills', 'compétences', 'savoir-faire'],
+      'Expérience': ['expérience', 'experience', 'expériences', 'work history', 'professional experience'],
+      'Formations & Certifications': ['formation', 'formations', 'certification', 'certifications', 'diplôme', 'diplome', 'education', 'études', 'etudes', 'study', 'studies']
+    };
+
     const systemPrompt = `Tu es un expert en extraction et anonymisation de CV. Analyse ce CV et extrais TOUTES les informations en les ANONYMISANT, en respectant la structure du template suivant : ${JSON.stringify(sectionNames)}.
 
 ÉTAPES D'ANONYMISATION CRITIQUES :
 1. Créer un TRIGRAMME : première lettre du prénom + première lettre du nom + dernière lettre du nom (tout en MAJUSCULE)
    Exemple : Jean DUPONT → JDT
 2. SUPPRIMER toutes informations personnelles : nom complet, prénom, email, téléphone, adresse, photos, QR codes, liens personnels (LinkedIn, GitHub, etc.)
-3. Identifier les sections en utilisant les noms EXACTS du template : ${sectionNames.join(', ')}
-4. Extraire les sous-catégories de compétences (${skillSubcategories.join(', ') || 'aucune'}) avec leurs items séparés par des virgules
-5. Inclure un placeholder pour les coordonnées commerciales si présentes dans l'en-tête du template
-6. Supprimer tout caractère parasite comme 'É' devant les compétences
-7. Extraire les projets, compétences, formations et missions professionnelles
+3. Identifier les sections en utilisant les noms EXACTS du template (${sectionNames.join(', ')}) et leurs synonymes : 
+   - Compétences : ${sectionSynonyms['Compétences'].join(', ')}
+   - Expérience : ${sectionSynonyms['Expérience'].join(', ')}
+   - Formations & Certifications : ${sectionSynonyms['Formations & Certifications'].join(', ')}
+   Mappe les sections du CV d'entrée (ex. : Formation, Diplôme, ETUDES) vers les noms du template (ex. : Formations & Certifications).
+4. Extraire les sous-catégories de compétences (${skillSubcategories.join(', ') || 'aucune'}) avec leurs items séparés par des virgules, SANS puces ni sauts de ligne.
+5. Inclure un placeholder pour les coordonnées commerciales si présentes dans l'en-tête du template.
+6. Supprimer tout caractère parasite comme 'É', '•', ou autres devant les compétences.
+7. Extraire les projets, compétences, formations et missions professionnelles.
 
 Retourne un JSON avec cette structure EXACTE :
 {
@@ -240,7 +251,6 @@ Retourne un JSON avec cette structure EXACTE :
       throw new Error('Failed to parse AI extraction result');
     }
 
-    // Ajouter un placeholder pour coordonnées commerciales si nécessaire
     extractedData.commercial_contact = {
       text: hasCommercialContact ? 'Contact Commercial' : '',
       enabled: hasCommercialContact
