@@ -124,7 +124,6 @@ async function analyzeDocxTemplate(docxData: Blob, supabase: any): Promise<any> 
     };
 
     if (settingsXml) {
-      // Margins (in twips, 1 twip = 1/20 pt, 1 mm ≈ 56.69 twips)
       const marginMatch = settingsXml.match(/<w:pgMar[^>]+w:top="(\d+)"[^>]+w:right="(\d+)"[^>]+w:bottom="(\d+)"[^>]+w:left="(\d+)"[^>]+w:header="(\d+)"[^>]+w:footer="(\d+)"/);
       if (marginMatch) {
         pageLayout.margins = {
@@ -135,18 +134,15 @@ async function analyzeDocxTemplate(docxData: Blob, supabase: any): Promise<any> 
         };
       }
 
-      // Orientation
       pageLayout.orientation = settingsXml.includes('<w:orient w:val="landscape"') ? "landscape" : "portrait";
 
-      // Page size
       const sizeMatch = settingsXml.match(/<w:pgSz[^>]+w:w="(\d+)"[^>]+w:h="(\d+)"/);
       if (sizeMatch) {
-        const width = parseInt(sizeMatch[1]) / 56.69; // twips to mm
+        const width = parseInt(sizeMatch[1]) / 56.69;
         const height = parseInt(sizeMatch[2]) / 56.69;
         pageLayout.size = (width > 200 && height > 280) ? "A4" : "Letter";
       }
 
-      // Columns
       const colsMatch = settingsXml.match(/<w:cols[^>]+w:num="(\d+)"[^>]*w:space="(\d+)"/);
       if (colsMatch) {
         const colCount = parseInt(colsMatch[1]);
@@ -164,7 +160,7 @@ async function analyzeDocxTemplate(docxData: Blob, supabase: any): Promise<any> 
     // === STYLE EXTRACTION ===
     const extractStyle = (runContent: string) => {
       const style: any = {
-        font: 'Arial', // Default to Arial to match Cober Template
+        font: 'Arial',
         size: '11pt',
         color: '#000000',
         bold: false,
@@ -221,7 +217,7 @@ async function analyzeDocxTemplate(docxData: Blob, supabase: any): Promise<any> 
         const indContent = indMatch[0];
         const leftMatch = indContent.match(/w:left="(\d+)"/);
         const firstLineMatch = indContent.match(/w:firstLine="(\d+)"/);
-        if (leftMatch) props.indentLeft = (parseInt(leftMatch[1]) * 0.0176).toFixed(2); // twips to mm
+        if (leftMatch) props.indentLeft = (parseInt(leftMatch[1]) * 0.0176).toFixed(2);
         if (firstLineMatch) props.indentFirstLine = (parseInt(firstLineMatch[1]) * 0.0176).toFixed(2);
       }
       
@@ -230,7 +226,7 @@ async function analyzeDocxTemplate(docxData: Blob, supabase: any): Promise<any> 
         const spacingContent = spacingMatch[0];
         const beforeMatch = spacingContent.match(/w:before="(\d+)"/);
         const afterMatch = spacingContent.match(/w:after="(\d+)"/);
-        if (beforeMatch) props.spacingBefore = (parseInt(beforeMatch[1]) / 20).toFixed(2); // twips to pt
+        if (beforeMatch) props.spacingBefore = (parseInt(beforeMatch[1]) / 20).toFixed(2);
         if (afterMatch) props.spacingAfter = (parseInt(afterMatch[1]) / 20).toFixed(2);
       }
       
@@ -259,10 +255,11 @@ async function analyzeDocxTemplate(docxData: Blob, supabase: any): Promise<any> 
       if (bulletMatch) {
         const numIdMatch = bulletMatch[1].match(/<w:numId[^>]+w:val="(\d+)"/);
         const ilvlMatch = bulletMatch[1].match(/<w:ilvl[^>]+w:val="(\d+)"/);
+        const textMatch = paraContent.match(/<w:t[^>]*>([^<]+)</w:t>/);
         props.bullet = {
           level: ilvlMatch ? parseInt(ilvlMatch[1]) : 0,
           numId: numIdMatch ? parseInt(numIdMatch[1]) : 0,
-          character: '•' // Force Cober Template bullet style
+          character: textMatch && textMatch[1].match(/^[\•\-\*]/) ? textMatch[1][0] : '•'
         };
       }
       
@@ -311,16 +308,24 @@ async function analyzeDocxTemplate(docxData: Blob, supabase: any): Promise<any> 
 
     // === ELEMENT EXTRACTION ===
     const styles: any = {};
-    const allColors = new Set<string>();
+    const sections: any[] = [];
     const skillSubcategories: any[] = [];
+    const allColors = new Set<string>();
     
-    const paragraphs = documentXml.matchAll(/<w:p[^>]*>(.*?)<\/w:p>/gs);
+    const paragraphs = Array.from(documentXml.matchAll(/<w:p[^>]*>(.*?)<\/w:p>/gs));
     let isFirstPage = true;
     let currentSection: string | null = null;
     let currentSubcategory: string | null = null;
     
-    for (const paraMatch of paragraphs) {
-      const paraContent = paraMatch[1];
+    // Common section keywords (case-insensitive, with variations)
+    const sectionKeywords = {
+      competences: ['compétence', 'competence', 'skills', 'compétences'],
+      experiences: ['expérience', 'experience', 'expériences', 'work history', 'professional experience'],
+      formation: ['formation', 'formations', 'certification', 'certifications', 'diplôme', 'diplome', 'education']
+    };
+
+    for (let i = 0; i < paragraphs.length; i++) {
+      const paraContent = paragraphs[i][1];
       const textMatches = Array.from(paraContent.matchAll(/<w:t[^>]*>([^<]+)<\/w:t>/g));
       const text = textMatches.map(m => m[1]).join('').trim();
       
@@ -329,20 +334,20 @@ async function analyzeDocxTemplate(docxData: Blob, supabase: any): Promise<any> 
       const runMatch = paraContent.match(/<w:r[^>]*>(.*?)<\/w:r>/s);
       if (!runMatch) continue;
       
-      const style = extractStyle(runMatch[1]);
+      const style = extractStyle(runContent);
       const paragraph = extractParagraph(paraContent);
       
       if (style.color !== '#000000') allColors.add(style.color);
       
-      const textUpper = text.toUpperCase();
+      const textLower = text.toLowerCase();
       const position = headerXml?.includes(paraContent) ? 'header' : footerXml?.includes(paraContent) ? 'footer' : 'body';
       
-      // Title/Métier (large font, centered or bold, first non-header paragraph)
-      if (!styles.title && style.size >= '14pt' && (paragraph.alignment === 'center' || style.bold) && isFirstPage) {
+      // Title/Métier (first bold/large paragraph, or contains job title keywords)
+      if (!styles.title && isFirstPage && (style.size >= '12pt' || style.bold) && (paragraph.alignment === 'center' || textLower.includes('architecte') || textLower.includes('analyste') || textLower.includes('product owner'))) {
         styles.title = { ...style, paragraph, position, text };
       }
       
-      // Skip commercial contact as per requirement
+      // Skip commercial contact
       if (text.match(/[\w\.-]+@[\w\.-]+\.\w+|\+?\d{10,}|\d{2}\s?\d{2}\s?\d{2}\s?\d{2}\s?\d{2}/)) {
         continue;
       }
@@ -352,56 +357,64 @@ async function analyzeDocxTemplate(docxData: Blob, supabase: any): Promise<any> 
         styles.trigram = { ...style, paragraph, position, text };
       }
       
-      // Section titles
-      if (textUpper.includes('COMPÉTENCE') || textUpper.includes('COMPETENCE')) {
-        currentSection = 'competences';
-        styles.section_competences = { ...style, paragraph, position, text };
-      } else if (textUpper.includes('EXPÉRIENCE') || textUpper.includes('EXPERIENCE')) {
-        currentSection = 'experiences';
-        styles.section_experiences = { ...style, paragraph, position, text };
-      } else if (textUpper.includes('FORMATION') || textUpper.includes('CERTIFICATION') || textUpper.includes('DIPLÔME')) {
-        currentSection = 'formation';
-        styles.section_formation = { ...style, paragraph, position, text };
+      // Section detection (using keywords)
+      let sectionDetected = false;
+      for (const [sectionKey, keywords] of Object.entries(sectionKeywords)) {
+        if (keywords.some(keyword => textLower.includes(keyword))) {
+          currentSection = sectionKey;
+          styles[`section_${sectionKey}`] = { ...style, paragraph, position, text };
+          sections.push({
+            name: text,
+            position,
+            title_style: { ...style },
+            spacing: { top: paragraph.spacingBefore || "10mm", bottom: paragraph.spacingAfter || "5mm" },
+            paragraph
+          });
+          sectionDetected = true;
+          break;
+        }
       }
       
-      // Skill subcategories (bold or italic, before bullet list)
-      if (currentSection === 'competences' && (style.bold || style.italic) && !paragraph.bullet && !textUpper.includes('COMPÉTENCE')) {
+      if (sectionDetected) continue;
+      
+      // Skill subcategories (bold or italic, not a bullet point, in competences section)
+      if (currentSection === 'competences' && (style.bold || style.italic) && !paragraph.bullet) {
         currentSubcategory = text;
         skillSubcategories.push({ name: text, style: { ...style, paragraph, position } });
       }
       
-      // Mission title (e.g., "MM/YYYY - MM/YYYY Rôle @ Entreprise" or "MM-YYYY - Actuellement")
-      if (currentSection === 'experiences' && text.match(/\d{2}[/-]\d{4}\s*-\s*(\d{2}[/-]\d{4}|Actuellement).*@/)) {
+      // Mission title (date format + role/company)
+      if (currentSection === 'experiences' && text.match(/\d{2}[/-]\d{4}\s*-\s*(\d{2}[/-]\d{4}|actuellement|present).*[@:]/i)) {
         styles.mission_title = { ...style, paragraph, position, text };
-        const dateMatch = text.match(/(\d{2}[/-]\d{4})\s*-\s*(\d{2}[/-]\d{4}|Actuellement)/);
-        styles.mission_date_format = dateMatch ? (dateMatch[2] === 'Actuellement' ? 'MM/YYYY - Actuellement' : 'MM/YYYY - MM/YYYY') : 'unknown';
+        const dateMatch = text.match(/(\d{2}[/-]\d{4})\s*-\s*(\d{2}[/-]\d{4}|actuellement|present)/i);
+        styles.mission_date_format = dateMatch ? (dateMatch[2].toLowerCase() === 'actuellement' || dateMatch[2].toLowerCase() === 'present' ? 'MM/YYYY - Actuellement' : 'MM/YYYY - MM/YYYY') : 'unknown';
       }
       
-      // Mission context (italic, follows mission title)
-      if (currentSection === 'experiences' && style.italic && text.toLowerCase().startsWith('contexte')) {
+      // Mission context (italic, starts with "contexte" or follows mission title)
+      if (currentSection === 'experiences' && style.italic && (textLower.startsWith('contexte') || (i > 0 && paragraphs[i-1][1].match(/\d{2}[/-]\d{4}\s*-\s*(\d{2}[/-]\d{4}|actuellement|present)/i)))) {
         styles.mission_context = { ...style, paragraph, position, text };
       }
       
-      // Mission achievements (bullet points, labeled "Missions" or "Réalisations")
-      if (currentSection === 'experiences' && paragraph.bullet && (text.toLowerCase().includes('missions') || text.toLowerCase().includes('réalisations') || styles.mission_achievement)) {
-        styles.mission_achievement = { ...style, paragraph, position, text, bulletChar: '•' };
+      // Mission achievements (bullet points in experiences)
+      if (currentSection === 'experiences' && paragraph.bullet) {
+        styles.mission_achievement = { ...style, paragraph, position, text, bulletChar: paragraph.bullet.character };
       }
       
-      // Mission environment (bold, technical terms)
-      if (currentSection === 'experiences' && style.bold && text.toLowerCase().startsWith('environnement')) {
+      // Mission environment (bold, starts with "environnement" or technical terms)
+      if (currentSection === 'experiences' && style.bold && (textLower.startsWith('environnement') || text.match(/java|python|sql|agile|linux|windows|docker/i))) {
         styles.mission_environment = { ...style, paragraph, position, text };
       }
       
-      // Skills (in compétences section, bullet points)
+      // Skills (bullet points in competences)
       if (currentSection === 'competences' && paragraph.bullet) {
-        styles.skills_item = { ...style, paragraph, position, text, bulletChar: '•', subcategory: currentSubcategory || 'Autres' };
+        styles.skills_item = { ...style, paragraph, position, text, bulletChar: paragraph.bullet.character, subcategory: currentSubcategory || 'Autres' };
       }
       
-      // Education (in formation section, bold, with year)
+      // Education (bold, in formation section, with year)
       if (currentSection === 'formation' && style.bold) {
         styles.education_degree = { ...style, paragraph, position, text };
         const dateMatch = text.match(/(\d{4})\s*-\s*(\d{4})|(\d{4})/);
-        const placeMatch = text.match(/@\s*([A-Z][a-z]+(?:\s[A-Z][a-z]+)*)$/);
+        const placeMatch = text.match(/[@,]\s*([A-Z][a-z]+(?:\s[A-Z][a-z]+)*)$/);
         styles.education_date_format = dateMatch ? (dateMatch[2] ? 'YYYY-YYYY' : 'YYYY') : 'unknown';
         if (placeMatch) styles.education_place = { ...style, paragraph, position, text: placeMatch[1] };
       }
@@ -422,8 +435,8 @@ async function analyzeDocxTemplate(docxData: Blob, supabase: any): Promise<any> 
     };
     
     const bodyStyle = styles.body_text || { font: 'Arial', size: '11pt', color: '#000000' };
-    const titleStyle = styles.section_competences || styles.section_experiences || styles.section_formation || { font: 'Arial', size: '14pt', color: '#000000', bold: true, case: 'uppercase' };
-    const primaryColor = Array.from(allColors)[0] || '#000000';
+    const titleStyle = styles.section_competences || styles.section_experiences || styles.section_formation || { font: 'Arial', size: '14pt', color: '#000000', bold: true, case: 'mixed' };
+    const primaryColor = Array.from(allColors).sort((a, b) => allColors.size - allColors.size)[0] || '#000000';
     
     console.log('✅ Extraction complete');
     console.log('  Font:', bodyStyle.font);
@@ -434,11 +447,11 @@ async function analyzeDocxTemplate(docxData: Blob, supabase: any): Promise<any> 
       layout: pageLayout,
       colors: {
         primary: primaryColor,
-        secondary: "#000000",
-        text: "#000000",
+        secondary: bodyStyle.color,
+        text: bodyStyle.color,
         background: "#ffffff",
         accent: primaryColor,
-        borders: "#000000"
+        borders: primaryColor
       },
       fonts: {
         title_font: titleStyle.font,
@@ -448,32 +461,32 @@ async function analyzeDocxTemplate(docxData: Blob, supabase: any): Promise<any> 
         title_weight: titleStyle.bold ? "bold" : "normal",
         line_height: "1.15"
       },
-      sections: [
+      sections: sections.length > 0 ? sections : [
         {
           name: "COMPÉTENCES",
-          position: styles.section_competences?.position || "body",
-          title_style: styles.section_competences || titleStyle,
+          position: "body",
+          title_style: titleStyle,
           spacing: { top: "10mm", bottom: "5mm" },
-          paragraph: styles.section_competences?.paragraph || { alignment: "left", spacing: { before: "12pt", after: "6pt" }, indent: { left: "0mm", firstLine: "0mm" } }
+          paragraph: { alignment: "left", spacing: { before: "12pt", after: "6pt" }, indent: { left: "0mm", firstLine: "0mm" } }
         },
         {
           name: "EXPÉRIENCE",
-          position: styles.section_experiences?.position || "body",
-          title_style: styles.section_experiences || titleStyle,
+          position: "body",
+          title_style: titleStyle,
           spacing: { top: "10mm", bottom: "5mm" },
-          paragraph: styles.section_experiences?.paragraph || { alignment: "left", spacing: { before: "12pt", after: "6pt" }, indent: { left: "0mm", firstLine: "0mm" } }
+          paragraph: { alignment: "left", spacing: { before: "12pt", after: "6pt" }, indent: { left: "0mm", firstLine: "0mm" } }
         },
         {
           name: "FORMATIONS & CERTIFICATIONS",
-          position: styles.section_formation?.position || "body",
-          title_style: styles.section_formation || titleStyle,
+          position: "body",
+          title_style: titleStyle,
           spacing: { top: "10mm", bottom: "5mm" },
-          paragraph: styles.section_formation?.paragraph || { alignment: "left", spacing: { before: "12pt", after: "6pt" }, indent: { left: "0mm", firstLine: "0mm" } }
+          paragraph: { alignment: "left", spacing: { before: "12pt", after: "6pt" }, indent: { left: "0mm", firstLine: "0mm" } }
         }
       ],
       element_styles: {
         commercial_contact: { ...bodyStyle, position: 'header', text: '', email: null, phone: null, first_name: null, last_name: null },
-        trigram: styles.trigram || { ...bodyStyle, color: primaryColor, bold: true, text: '' },
+        trigram: styles.trigram || { ...bodyStyle, bold: true, text: '' },
         title: styles.title || { ...titleStyle, text: '' },
         section_competences: styles.section_competences || titleStyle,
         section_experiences: styles.section_experiences || titleStyle,
@@ -494,13 +507,13 @@ async function analyzeDocxTemplate(docxData: Blob, supabase: any): Promise<any> 
       visual_elements: {
         logo: null,
         tables: tables,
-        borders: { style: "solid", width: "0.5pt", color: "#000000" },
-        bullets: styles.mission_achievement ? { character: '•', color: primaryColor, indent: "10mm", font: bodyStyle.font, size: bodyStyle.size } : { character: '•', color: primaryColor, indent: "10mm" }
+        borders: { style: "solid", width: "0.5pt", color: primaryColor },
+        bullets: styles.mission_achievement ? { character: styles.mission_achievement.bulletChar, color: primaryColor, indent: styles.mission_achievement.paragraph.indentLeft || "10mm", font: bodyStyle.font, size: bodyStyle.size } : { character: '•', color: primaryColor, indent: "10mm" }
       },
       spacing: {
-        section_spacing: "12pt",
-        element_spacing: "6pt",
-        padding: "10mm",
+        section_spacing: styles.section_competences?.paragraph.spacingBefore || "12pt",
+        element_spacing: styles.body_text?.paragraph.spacingAfter || "6pt",
+        padding: pageLayout.margins.left,
         line_spacing: "1.15"
       },
       page: page
@@ -537,23 +550,23 @@ function getDefaultStructure() {
     },
     sections: [
       {
-        name: "COMPÉTENCES",
+        name: "Compétences",
         position: "body",
-        title_style: { font: "Arial", size: "14pt", color: "#000000", bold: true, case: 'uppercase' },
+        title_style: { font: "Arial", size: "14pt", color: "#000000", bold: true, case: 'mixed' },
         spacing: { top: "10mm", bottom: "5mm" },
         paragraph: { alignment: "left", spacing: { before: "12pt", after: "6pt" }, indent: { left: "0mm", firstLine: "0mm" } }
       },
       {
-        name: "EXPÉRIENCE",
+        name: "Expérience",
         position: "body",
-        title_style: { font: "Arial", size: "14pt", color: "#000000", bold: true, case: 'uppercase' },
+        title_style: { font: "Arial", size: "14pt", color: "#000000", bold: true, case: 'mixed' },
         spacing: { top: "10mm", bottom: "5mm" },
         paragraph: { alignment: "left", spacing: { before: "12pt", after: "6pt" }, indent: { left: "0mm", firstLine: "0mm" } }
       },
       {
-        name: "FORMATIONS & CERTIFICATIONS",
+        name: "Formations & Certifications",
         position: "body",
-        title_style: { font: "Arial", size: "14pt", color: "#000000", bold: true, case: 'uppercase' },
+        title_style: { font: "Arial", size: "14pt", color: "#000000", bold: true, case: 'mixed' },
         spacing: { top: "10mm", bottom: "5mm" },
         paragraph: { alignment: "left", spacing: { before: "12pt", after: "6pt" }, indent: { left: "0mm", firstLine: "0mm" } }
       }
@@ -562,9 +575,9 @@ function getDefaultStructure() {
       commercial_contact: { font: "Arial", size: "11pt", color: "#000000", bold: false, position: 'header', text: '', email: null, phone: null, first_name: null, last_name: null },
       trigram: { font: "Arial", size: "11pt", color: "#000000", bold: true, text: '' },
       title: { font: "Arial", size: "14pt", color: "#000000", bold: true, text: '' },
-      section_competences: { font: "Arial", size: "14pt", color: "#000000", bold: true, case: 'uppercase' },
-      section_experiences: { font: "Arial", size: "14pt", color: "#000000", bold: true, case: 'uppercase' },
-      section_formation: { font: "Arial", size: "14pt", color: "#000000", bold: true, case: 'uppercase' },
+      section_competences: { font: "Arial", size: "14pt", color: "#000000", bold: true, case: 'mixed' },
+      section_experiences: { font: "Arial", size: "14pt", color: "#000000", bold: true, case: 'mixed' },
+      section_formation: { font: "Arial", size: "14pt", color: "#000000", bold: true, case: 'mixed' },
       mission_title: { font: "Arial", size: "11pt", color: "#000000", bold: true, text: '' },
       mission_date_format: 'MM/YYYY - MM/YYYY',
       mission_context: { font: "Arial", size: "11pt", color: "#000000", italic: true, text: '' },
