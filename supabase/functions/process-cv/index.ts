@@ -1,6 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { readableStreamFromReader } from "https://deno.land/std@0.168.0/streams/conversion.ts";
+import { JSZip } from "https://esm.sh/jszip@3.10.1";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -29,10 +29,10 @@ serve(async (req) => {
 
     console.log('Processing CV:', cvDocumentId);
 
-    // Récupérer le document CV
+    // Récupérer le document CV et le template associé
     const { data: cvDoc, error: cvError } = await supabase
       .from('cv_documents')
-      .select('*, cv_templates(*)')
+      .select('*, cv_templates(structure_data)')
       .eq('id', cvDocumentId)
       .single();
 
@@ -40,14 +40,14 @@ serve(async (req) => {
       throw new Error('CV document not found');
     }
 
-    // Logger l'étape
+    const templateStructure = cvDoc.cv_templates?.structure_data || {};
+
     await supabase.from('processing_logs').insert({
       cv_document_id: cvDocumentId,
       step: 'extraction',
       message: 'Starting CV data extraction',
     });
 
-    // Mettre à jour le statut
     await supabase
       .from('cv_documents')
       .update({ status: 'analyzing' })
@@ -55,7 +55,6 @@ serve(async (req) => {
 
     console.log('Downloading CV file from:', cvDoc.original_file_path);
 
-    // Télécharger le fichier CV original
     const { data: cvFileData, error: cvFileError } = await supabase
       .storage
       .from('cv-uploads')
@@ -66,56 +65,55 @@ serve(async (req) => {
       throw new Error('Failed to download CV file');
     }
 
-    console.log('CV file downloaded, extracting text...');
+    console.log('CV file downloaded, extracting text and styles...');
 
-    // Extraire le texte du fichier selon son type
     let extractedText = '';
+    let structuredData: any[] = [];
     const fileType = cvDoc.original_file_type;
 
     try {
       const arrayBuffer = await cvFileData.arrayBuffer();
       const bytes = new Uint8Array(arrayBuffer);
-      
-      if (fileType === 'pdf') {
-        // Pour les PDFs, utiliser pdf-parse compatible Deno
-        const pdfParse = await import('https://esm.sh/pdf-parse@1.1.1');
+
+      if (fileType === 'docx' || fileType === 'doc') {
+        // Extraire texte et styles pour DOCX
+        const zip = await JSZip.loadAsync(arrayBuffer);
+        const documentXml = await zip.file('word/document.xml')?.async('text');
         
-        try {
-          const data = await pdfParse.default(bytes);
-          extractedText = data.text;
-          console.log('PDF text extracted, length:', extractedText.length);
-        } catch (pdfError) {
-          console.error('PDF parsing error:', pdfError);
-          // Fallback: essayer une extraction basique
-          const textDecoder = new TextDecoder('utf-8', { fatal: false });
-          const rawText = textDecoder.decode(bytes);
-          extractedText = rawText
-            .replace(/[^\x20-\x7E\n\r\t\u00C0-\u017F]/g, ' ')
-            .replace(/\s+/g, ' ')
-            .trim()
-            .substring(0, 50000);
-          console.log('PDF fallback extraction, length:', extractedText.length);
+        if (!documentXml) throw new Error('document.xml not found');
+
+        const paragraphs = Array.from(documentXml.matchAll(/<w:p[^>]*>(.*?)<\/w:p>/gs));
+        for (const para of paragraphs) {
+          const paraContent = para[1];
+          const textMatches = Array.from(paraContent.matchAll(/<w:t[^>]*>([^<]+)<\/w:t>/g));
+          const text = textMatches.map(m => m[1]).join('').trim();
+          if (!text) continue;
+
+          const runMatch = paraContent.match(/<w:r[^>]*>(.*?)<\/w:r>/s);
+          if (!runMatch) continue;
+
+          const style: any = {};
+          const fontMatch = runMatch[1].match(/<w:rFonts[^>]+w:ascii="([^"]+)"/);
+          if (fontMatch) style.font = fontMatch[1];
+          const sizeMatch = runMatch[1].match(/<w:sz[^>]+w:val="(\d+)"/);
+          if (sizeMatch) style.size = `${parseInt(sizeMatch[1]) / 2}pt`;
+          const colorMatch = runMatch[1].match(/<w:color[^>]+w:val="([^"]+)"/);
+          if (colorMatch && colorMatch[1] !== 'auto') style.color = `#${colorMatch[1]}`;
+          style.bold = /<w:b[\/\s>]/.test(runMatch[1]);
+          style.italic = /<w:i[\/\s>]/.test(runMatch[1]);
+          style.bullet = paraContent.match(/<w:numPr>/) ? true : false;
+
+          structuredData.push({ text, style });
+          extractedText += text + '\n';
         }
-      } else if (fileType === 'docx' || fileType === 'doc') {
-        // Pour les DOCX et DOC, utiliser mammoth
-        const mammoth = await import('https://esm.sh/mammoth@1.6.0');
-        const result = await mammoth.extractRawText({ arrayBuffer });
-        extractedText = result.value;
-        console.log(`${fileType.toUpperCase()} text extracted, length:`, extractedText.length);
-      } else if (fileType === 'pptx' || fileType === 'ppt') {
-        // Pour PPTX/PPT, utiliser une approche plus propre avec une limite de taille
-        const textDecoder = new TextDecoder('utf-8', { fatal: false });
-        const rawText = textDecoder.decode(bytes);
-        
-        // Nettoyer et limiter le texte pour éviter les données binaires
-        const cleanText = rawText
-          .replace(/[^\x20-\x7E\n\r\t]/g, ' ') // Garder seulement les caractères imprimables
-          .replace(/\s+/g, ' ') // Normaliser les espaces
-          .trim();
-        
-        // Limiter à 50000 caractères pour éviter de dépasser les tokens
-        extractedText = cleanText.substring(0, 50000);
-        console.log(`${fileType.toUpperCase()} text extracted (cleaned), length:`, extractedText.length);
+      } else if (fileType === 'pdf') {
+        const pdfParse = await import('https://esm.sh/pdf-parse@1.1.1');
+        const data = await pdfParse.default(bytes);
+        extractedText = data.text;
+        structuredData = extractedText.split('\n').map(line => ({
+          text: line.trim(),
+          style: { font: 'Unknown', size: 'Unknown', color: '#000000', bold: false, italic: false, bullet: false }
+        }));
       } else {
         throw new Error(`Unsupported file type: ${fileType}`);
       }
@@ -125,28 +123,29 @@ serve(async (req) => {
       }
     } catch (extractError) {
       console.error('Error extracting text:', extractError);
-      throw new Error(`Failed to extract text from ${fileType} file: ${extractError instanceof Error ? extractError.message : 'Unknown error'}`);
+      throw new Error(`Failed to extract text from ${fileType} file`);
     }
 
     console.log('Text extracted, analyzing with AI...');
 
-    // Extraction avec l'IA - ANONYMISATION COMPLÈTE
-    const systemPrompt = `Tu es un expert en extraction et anonymisation de CV. Analyse ce CV et extrais TOUTES les informations en les ANONYMISANT.
+    // Prompt amélioré pour inclure les noms de section du template
+    const sectionNames = templateStructure.sections?.map((s: any) => s.name) || ['Compétences', 'Expériences', 'Formations & Certifications'];
+    const systemPrompt = `Tu es un expert en extraction et anonymisation de CV. Analyse ce CV et extrais TOUTES les informations en les ANONYMISANT, en respectant la structure du template suivant : ${JSON.stringify(sectionNames)}.
 
 ÉTAPES D'ANONYMISATION CRITIQUES :
 1. Créer un TRIGRAMME : première lettre du prénom + première lettre du nom + dernière lettre du nom (tout en MAJUSCULE)
-   Exemple : Jean DUPONT → JDT, Marie MARTIN → MMN
-2. SUPPRIMER toutes informations personnelles : nom complet, prénom, email, téléphone, adresse personnelle
-3. SUPPRIMER photos de portrait, QR codes personnels
-4. SUPPRIMER tous liens personnels : réseaux sociaux (LinkedIn, Twitter, etc.), site web personnel, GitHub personnel, portfolio personnel
-5. Extraire TOUS les projets, compétences, formations et missions professionnelles
+   Exemple : Jean DUPONT → JDT
+2. SUPPRIMER toutes informations personnelles : nom complet, prénom, email, téléphone, adresse, photos, QR codes, liens personnels (LinkedIn, GitHub, etc.)
+3. Identifier les sections en utilisant les noms EXACTS du template : ${sectionNames.join(', ')}
+4. Extraire les sous-catégories de compétences si présentes (ex. : Langage/BDD, OS)
+5. Extraire les projets, compétences, formations et missions professionnelles
 
 Retourne un JSON avec cette structure EXACTE :
 {
   "personal": {
     "first_name": "prénom extrait (à ne pas inclure dans le CV final)",
     "last_name": "nom extrait (à ne pas inclure dans le CV final)",
-    "trigram": "TRIGRAMME (ex: JDT pour Jean DUPONT)",
+    "trigram": "TRIGRAMME (ex: JDT)",
     "title": "titre professionnel",
     "years_experience": nombre_années,
     "email_found": "email extrait (à ne pas inclure)",
@@ -163,8 +162,12 @@ Retourne un JSON avec cette structure EXACTE :
     }
   ],
   "skills": {
-    "technical": ["compétence1", "compétence2"],
-    "tools": ["outil1", "outil2"],
+    "subcategories": [
+      {
+        "name": "nom de la sous-catégorie (ex: Langage/BDD)",
+        "items": ["compétence1", "compétence2"]
+      }
+    ],
     "languages": ["langue1: niveau", "langue2: niveau"],
     "certifications": ["cert1", "cert2"]
   },
@@ -204,7 +207,7 @@ Retourne un JSON avec cette structure EXACTE :
           },
           {
             role: 'user',
-            content: `Voici le texte extrait du CV à analyser et anonymiser :\n\n${extractedText}`
+            content: `Texte extrait du CV avec styles :\n\n${JSON.stringify(structuredData, null, 2)}`
           }
         ],
         temperature: 0.1,
@@ -212,45 +215,32 @@ Retourne un JSON avec cette structure EXACTE :
     });
 
     if (!aiResponse.ok) {
-      const errorText = await aiResponse.text();
-      console.error('AI API error:', aiResponse.status, errorText);
       throw new Error('AI extraction failed');
     }
 
     const aiData = await aiResponse.json();
     const content = aiData.choices?.[0]?.message?.content;
+    if (!content) throw new Error('No content in AI response');
 
-    if (!content) {
-      throw new Error('No content in AI response');
-    }
-
-    console.log('AI extraction response:', content);
-
-    // Parser la réponse JSON
     let extractedData;
     try {
-      // Extraire le JSON de la réponse (peut être entouré de ```json ... ```)
       const jsonMatch = content.match(/```json\s*([\s\S]*?)\s*```/) || content.match(/\{[\s\S]*\}/);
       const jsonStr = jsonMatch ? (jsonMatch[1] || jsonMatch[0]) : content;
       extractedData = JSON.parse(jsonStr);
-      console.log('Successfully parsed extracted data');
     } catch (parseError) {
       console.error('Error parsing AI response:', parseError);
       throw new Error('Failed to parse AI extraction result');
     }
 
-    // Logger le succès
     await supabase.from('processing_logs').insert({
       cv_document_id: cvDocumentId,
       step: 'extraction',
       message: 'CV data extracted successfully',
-      details: { note: 'Using default structure - OCR implementation pending' }
+      details: { processing_time_ms: Date.now() - startTime }
     });
 
-    // Mettre à jour le document avec les données extraites
     const processingTime = Date.now() - startTime;
-    
-    const { error: updateError } = await supabase
+    await supabase
       .from('cv_documents')
       .update({ 
         extracted_data: extractedData,
@@ -258,21 +248,6 @@ Retourne un JSON avec cette structure EXACTE :
         processing_time_ms: processingTime
       })
       .eq('id', cvDocumentId);
-
-    if (updateError) {
-      console.error('Error updating CV document:', updateError);
-      throw new Error('Failed to save extracted data');
-    }
-
-    // Logger le succès
-    await supabase.from('processing_logs').insert({
-      cv_document_id: cvDocumentId,
-      step: 'extraction',
-      message: 'CV data extracted successfully',
-      details: { processing_time_ms: processingTime }
-    });
-
-    console.log('CV processed successfully in', processingTime, 'ms');
 
     return new Response(
       JSON.stringify({ 
@@ -286,20 +261,14 @@ Retourne un JSON avec cette structure EXACTE :
 
   } catch (error) {
     console.error('Error in process-cv function:', error);
-
-    // Logger l'erreur
     const { cvDocumentId } = await req.json().catch(() => ({}));
     if (cvDocumentId) {
-      const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
-      const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-      const supabase = createClient(supabaseUrl, supabaseKey);
-      
+      const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
       await supabase.from('processing_logs').insert({
         cv_document_id: cvDocumentId,
         step: 'error',
         message: error instanceof Error ? error.message : 'Unknown error',
       });
-
       await supabase
         .from('cv_documents')
         .update({ 
@@ -308,15 +277,9 @@ Retourne un JSON avec cette structure EXACTE :
         })
         .eq('id', cvDocumentId);
     }
-
     return new Response(
-      JSON.stringify({ 
-        error: error instanceof Error ? error.message : 'Unknown error' 
-      }),
-      { 
-        status: 500,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-      }
+      JSON.stringify({ error: error instanceof Error ? error.message : 'Unknown error' }),
+      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   }
 });
