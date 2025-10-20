@@ -1,6 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.75.0";
-import { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType, ImageRun, UnderlineType, convertInchesToTwip, convertMillimetersToTwip, BorderStyle, Header } from "https://esm.sh/docx@8.5.0";
+import { Document, Packer, Paragraph, TextRun, AlignmentType, ImageRun, UnderlineType, convertInchesToTwip, convertMillimetersToTwip, BorderStyle, Header } from "https://esm.sh/docx@8.5.0";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -62,6 +62,26 @@ serve(async (req) => {
 
     const children = [];
     const headers = [];
+
+    // Coordonnées commerciales dans l'en-tête
+    if (extractedData.commercial_contact?.enabled) {
+      const contactStyle = elementStyles.commercial_contact || {};
+      headers.push(
+        new Paragraph({
+          children: [
+            new TextRun({
+              text: extractedData.commercial_contact.text || 'Contact Commercial',
+              bold: contactStyle.bold !== false,
+              size: ptToHalfPt(contactStyle.size || fonts.body_size),
+              color: colorToHex(contactStyle.color || colors.text),
+              font: contactStyle.font || fonts.body_font,
+            }),
+          ],
+          alignment: contactStyle.paragraph?.alignment === 'center' ? AlignmentType.CENTER : AlignmentType.RIGHT,
+          spacing: { after: 120 }
+        })
+      );
+    }
 
     // Logo dans l'en-tête
     if (logoImage && visualElements.logo?.position === 'header') {
@@ -154,42 +174,45 @@ serve(async (req) => {
                 new TextRun({
                   text: subcategory.name,
                   bold: subcategoryStyle.bold !== false,
+                  italic: subcategoryStyle.italic || false,
                   size: ptToHalfPt(subcategoryStyle.size || fonts.body_size),
                   color: colorToHex(subcategoryStyle.color || colors.text),
                   font: subcategoryStyle.font || fonts.body_font,
                 }),
               ],
               spacing: { after: ptToHalfPt(spacing.element_spacing) }
+            }),
+            new Paragraph({
+              children: [
+                new TextRun({
+                  text: subcategory.items.join(', '),
+                  size: ptToHalfPt(elementStyles.skills_item?.size || fonts.body_size),
+                  color: colorToHex(elementStyles.skills_item?.color || colors.text),
+                  font: elementStyles.skills_item?.font || fonts.body_font,
+                }),
+              ],
+              indent: { left: mmToTwip(visualElements.bullets?.indent || '10mm') },
+              spacing: { after: ptToHalfPt(spacing.element_spacing) }
             })
           );
-          for (const item of subcategory.items) {
-            children.push(
-              new Paragraph({
-                children: [
-                  new TextRun({
-                    text: `${visualElements.bullets?.character || '•'} ${item}`,
-                    size: ptToHalfPt(elementStyles.skills_item?.size || fonts.body_size),
-                    color: colorToHex(elementStyles.skills_item?.color || colors.text),
-                    font: elementStyles.skills_item?.font || fonts.body_font,
-                  }),
-                ],
-                indent: { left: mmToTwip(visualElements.bullets?.indent || '10mm') },
-                spacing: { after: ptToHalfPt(spacing.element_spacing) }
-              })
-            );
-          }
         }
         if (extractedData.skills?.languages?.length > 0) {
           children.push(
             new Paragraph({
               children: [
                 new TextRun({
-                  text: 'Langues: ',
+                  text: 'Langues',
                   bold: elementStyles.skills_label?.bold !== false,
+                  italic: elementStyles.skills_label?.italic || false,
                   size: ptToHalfPt(elementStyles.skills_label?.size || fonts.body_size),
                   color: colorToHex(elementStyles.skills_label?.color || colors.text),
                   font: elementStyles.skills_label?.font || fonts.body_font,
                 }),
+              ],
+              spacing: { after: ptToHalfPt(spacing.element_spacing) }
+            }),
+            new Paragraph({
+              children: [
                 new TextRun({
                   text: extractedData.skills.languages.join(', '),
                   size: ptToHalfPt(elementStyles.skills_item?.size || fonts.body_size),
@@ -197,6 +220,7 @@ serve(async (req) => {
                   font: elementStyles.skills_item?.font || fonts.body_font,
                 }),
               ],
+              indent: { left: mmToTwip(visualElements.bullets?.indent || '10mm') },
               spacing: { after: ptToHalfPt(spacing.element_spacing) }
             })
           );
@@ -206,12 +230,18 @@ serve(async (req) => {
             new Paragraph({
               children: [
                 new TextRun({
-                  text: 'Certifications: ',
+                  text: 'Certifications',
                   bold: elementStyles.skills_label?.bold !== false,
+                  italic: elementStyles.skills_label?.italic || false,
                   size: ptToHalfPt(elementStyles.skills_label?.size || fonts.body_size),
                   color: colorToHex(elementStyles.skills_label?.color || colors.text),
                   font: elementStyles.skills_label?.font || fonts.body_font,
                 }),
+              ],
+              spacing: { after: ptToHalfPt(spacing.element_spacing) }
+            }),
+            new Paragraph({
+              children: [
                 new TextRun({
                   text: extractedData.skills.certifications.join(', '),
                   size: ptToHalfPt(elementStyles.skills_item?.size || fonts.body_size),
@@ -219,6 +249,7 @@ serve(async (req) => {
                   font: elementStyles.skills_item?.font || fonts.body_font,
                 }),
               ],
+              indent: { left: mmToTwip(visualElements.bullets?.indent || '10mm') },
               spacing: { after: ptToHalfPt(spacing.element_spacing) }
             })
           );
@@ -229,7 +260,7 @@ serve(async (req) => {
             new Paragraph({
               children: [
                 new TextRun({
-                  text: `${mission.client || 'N/A'} | ${mission.role || ''} | ${mission.date_start || ''} - ${mission.date_end || ''}`,
+                  text: `${mission.date_start || ''} - ${mission.date_end || ''} ${mission.role || ''} @ ${mission.client || 'N/A'}`,
                   bold: elementStyles.mission_title?.bold !== false,
                   size: ptToHalfPt(elementStyles.mission_title?.size || fonts.body_size),
                   color: colorToHex(elementStyles.mission_title?.color || colors.primary),
@@ -267,7 +298,7 @@ serve(async (req) => {
               new Paragraph({
                 children: [
                   new TextRun({
-                    text: 'Réalisations:',
+                    text: 'Missions',
                     bold: true,
                     size: ptToHalfPt(elementStyles.mission_achievement?.size || fonts.body_size),
                     color: colorToHex(elementStyles.mission_achievement?.color || colors.text),
@@ -338,7 +369,7 @@ serve(async (req) => {
               new Paragraph({
                 children: [
                   new TextRun({
-                    text: `Spécialité: ${edu.field}`,
+                    text: edu.field,
                     size: ptToHalfPt(elementStyles.education_place?.size || fonts.body_size),
                     color: colorToHex(elementStyles.education_place?.color || colors.text),
                     font: elementStyles.education_place?.font || fonts.body_font,
