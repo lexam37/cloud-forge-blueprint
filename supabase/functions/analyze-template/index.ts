@@ -14,6 +14,8 @@ const sectionKeywords = {
 };
 
 const skillSubcategories = ['Langage/BDD', 'OS', 'Outils', 'Méthodologies'];
+const missionSubcategories = ['titre', 'date', 'entreprise', 'lieu', 'contexte', 'objectif', 'missions', 'tâches', 'environnement', 'technologies'];
+const educationSubcategories = ['diplôme', 'date', 'lieu', 'organisme'];
 
 async function analyzeDocxTemplate(arrayBuffer: ArrayBuffer, templateId: string, supabase: any) {
   const { value: html } = await convert({ arrayBuffer });
@@ -22,7 +24,7 @@ async function analyzeDocxTemplate(arrayBuffer: ArrayBuffer, templateId: string,
   const parser = new DOMParser();
   const doc = parser.parseFromString(html, 'text/html');
   const allColors = new Set<string>();
-  const styles: any = { skill_subcategories: [], skills_item: {} };
+  const styles: any = { skill_subcategories: [], mission_subcategories: {}, education_subcategories: {} };
   const sections: any[] = [];
   const visualElements: any = {};
   let currentSection: string | null = null;
@@ -41,25 +43,34 @@ async function analyzeDocxTemplate(arrayBuffer: ArrayBuffer, templateId: string,
       color: styleAttr.match(/color:(#[0-9a-fA-F]{6})/)?.[1] || '#000000',
       bold: styleAttr.includes('font-weight:bold'),
       italic: styleAttr.includes('font-style:italic'),
+      underline: styleAttr.includes('text-decoration:underline') ? { type: 'single', color: styleAttr.match(/text-decoration-color:(#[0-9a-fA-F]{6})/)?.[1] || '#000000' } : null,
       case: text.match(/^[A-Z][a-z]+/) ? 'mixed' : text === text.toUpperCase() ? 'uppercase' : 'lowercase',
       bullet: p.querySelector('li') || text.match(/^[•\-\*É°\u2022\u25CF]/) ? true : false,
       alignment: styleAttr.includes('text-align:center') ? 'center' : styleAttr.includes('text-align:right') ? 'right' : 'left',
       spacingBefore: styleAttr.match(/margin-top:([^;]+)/)?.[1]?.trim() || '0pt',
       spacingAfter: styleAttr.match(/margin-bottom:([^;]+)/)?.[1]?.trim() || '0pt',
-      indent: styleAttr.match(/padding-left:([^;]+)/)?.[1]?.trim() || '0pt'
+      indent: styleAttr.match(/padding-left:([^;]+)/)?.[1]?.trim() || text.match(/\t/) ? '5mm' : '0pt'
     };
 
     if (style.color && style.color !== '#000000') allColors.add(style.color);
 
     const textLower = text.toLowerCase();
-    const position = index < 2 ? 'header' : 'body';
+    const position = index < 2 ? 'header' : index > paragraphs.length - 3 ? 'footer' : 'body';
 
-    // Coordonnées commerciales
-    if (position === 'header' && text.match(/contact\s*(commercial|professionnel)/i)) {
-      styles.commercial_contact = { ...style, position, text };
+    // Coordonnées commerciales et trigramme
+    if (position === 'header') {
+      if (text.match(/contact\s*(commercial|professionnel)/i)) {
+        styles.commercial_contact = { ...style, position, text };
+      }
+      if (text.match(/^[A-Z]{3}$/)) {
+        styles.trigram = { ...style, position, text };
+      }
+      if (text.match(/architecte|ingénieur|consultant|expert/i)) {
+        styles.title = { ...style, position, text };
+      }
     }
 
-    // Logo (simplifié)
+    // Logo
     if (p.querySelector('img')) {
       visualElements.logo = {
         position,
@@ -80,8 +91,8 @@ async function analyzeDocxTemplate(arrayBuffer: ArrayBuffer, templateId: string,
           position,
           title_style: {
             ...style,
-            case: sectionKey === 'Compétences' ? 'mixed' : style.case, // Forcer casse mixte pour Compétences
-            color: sectionKey === 'Compétences' ? '#142D5A' : style.color, // Forcer bleu pour Compétences
+            case: sectionKey === 'Compétences' ? 'mixed' : style.case,
+            color: sectionKey === 'Compétences' ? '#142D5A' : style.color,
             font: sectionKey === 'Compétences' ? 'Segoe UI Symbol' : style.font,
             size: sectionKey === 'Compétences' ? '14pt' : style.size
           },
@@ -93,31 +104,49 @@ async function analyzeDocxTemplate(arrayBuffer: ArrayBuffer, templateId: string,
       }
     }
 
-    // Sous-catégories et compétences
+    // Sous-catégories
     if (currentSection === 'Compétences' && !sectionDetected) {
-      const textParts = text.split(/[\t:]/).map(t => t.trim()); // Détecter tabulation ou deux-points
+      const textParts = text.split(/[\t:]/).map(t => t.trim());
       if (skillSubcategories.some(sc => textLower.includes(sc.toLowerCase()))) {
         styles.skill_subcategories.push({
           name: textParts[0],
-          style: { ...style, bold: false } // Sous-catégories non gras
+          style: { ...style, bold: false, color: '#329696', font: 'Segoe UI Symbol', size: '11pt' }
         });
       } else if (textParts.length > 1 || style.bullet) {
         styles.skills_item = {
           ...style,
-          bold: true, // Compétences en gras
-          color: '#329696', // Couleur verte du template
+          bold: true,
+          color: '#329696',
           font: 'Segoe UI Symbol',
           size: '11pt'
         };
+      }
+    } else if (currentSection === 'Expérience' && !sectionDetected) {
+      if (text.match(/^\d{2}\/\d{4}\s*-\s*\d{2}\/\d{4}|^[A-Z][a-z]+\s*@/i)) {
+        styles.mission_title = { ...style, text };
+      } else if (textLower.includes('contexte') || textLower.includes('objectif')) {
+        styles.mission_context = { ...style, text };
+      } else if (textLower.includes('mission') || textLower.includes('tâche')) {
+        styles.mission_achievements = { ...style, text, bullet: style.bullet };
+      } else if (textLower.includes('environnement') || textLower.includes('technologie')) {
+        styles.mission_environment = { ...style, text };
+      } else if (text.match(/lieu|ville|city/i)) {
+        styles.mission_location = { ...style, text };
+      }
+    } else if (currentSection === 'Formations & Certifications' && !sectionDetected) {
+      if (text.match(/^\d{4}\s*[A-Z][a-z]+|^[A-Z][a-z]+\s*@\s*[A-Z]/i)) {
+        styles.education_degree = { ...style, text };
+      } else if (text.match(/lieu|ville|city|organisme|université|école/i)) {
+        styles.education_details = { ...style, text };
       }
     }
   });
 
   const structureData = {
     colors: {
-      primary: '#142D5A', // Bleu du titre Compétences
+      primary: '#142D5A',
       text: '#000000',
-      secondary: '#329696' // Vert des compétences
+      secondary: '#329696'
     },
     fonts: {
       title_font: 'Segoe UI Symbol',
@@ -136,7 +165,8 @@ async function analyzeDocxTemplate(arrayBuffer: ArrayBuffer, templateId: string,
     layout: {
       margins: { top: '20mm', right: '15mm', bottom: '20mm', left: '15mm' },
       orientation: 'portrait',
-      size: 'A4'
+      size: 'A4',
+      columns: 1
     },
     sections,
     visual_elements: visualElements,
