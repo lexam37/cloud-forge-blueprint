@@ -8,6 +8,12 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
+const sectionKeywords = {
+  'Compétences': ['compétence', 'competence', 'skills', 'compétences', 'savoir-faire'],
+  'Expérience': ['expérience', 'experience', 'expériences', 'work history', 'professional experience'],
+  'Formations & Certifications': ['formation', 'formations', 'certification', 'certifications', 'diplôme', 'diplome', 'education', 'études', 'etudes', 'study', 'studies']
+};
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
@@ -71,6 +77,7 @@ serve(async (req) => {
         let currentSubcategory = '';
         let skillItems: string[] = [];
         let currentSection = '';
+        let currentMission: any = null;
 
         paragraphs.forEach((p: any) => {
           const text = p.textContent.trim().replace(/^[•\-\*É°\u2022\u25CF]\s*/g, '');
@@ -83,8 +90,9 @@ serve(async (req) => {
             color: styleAttr.match(/color:(#[0-9a-fA-F]{6})/)?.[1] || '#000000',
             bold: styleAttr.includes('font-weight:bold'),
             italic: styleAttr.includes('font-style:italic'),
+            underline: styleAttr.includes('text-decoration:underline') ? { type: 'single', color: styleAttr.match(/text-decoration-color:(#[0-9a-fA-F]{6})/)?.[1] || '#000000' } : null,
             bullet: p.querySelector('li') || text.match(/^[•\-\*É°\u2022\u25CF]/) ? true : false,
-            indent: styleAttr.match(/padding-left:([^;]+)/)?.[1]?.trim() || '0pt'
+            indent: styleAttr.match(/padding-left:([^;]+)/)?.[1]?.trim() || text.match(/\t/) ? '5mm' : '0pt'
           };
 
           const textLower = text.toLowerCase();
@@ -93,6 +101,11 @@ serve(async (req) => {
             if (keywords.some(keyword => textLower.includes(keyword))) {
               currentSection = sectionKey;
               isSection = true;
+              if (currentMission) {
+                structuredData.push(currentMission);
+                currentMission = null;
+              }
+              structuredData.push({ text, style, section: sectionKey });
               break;
             }
           }
@@ -103,42 +116,75 @@ serve(async (req) => {
               if (skillItems.length > 0) {
                 structuredData.push({
                   text: `${currentSubcategory}: ${skillItems.join(', ')}`,
-                  style: { ...style, bold: false, bullet: false }
+                  style: { ...style, bold: false, bullet: false },
+                  section: 'Compétences',
+                  subcategory: currentSubcategory
                 });
                 skillItems = [];
               }
               currentSubcategory = textParts[0];
-              structuredData.push({ text: currentSubcategory, style: { ...style, bold: false } });
+              structuredData.push({ text: currentSubcategory, style: { ...style, bold: false }, section: 'Compétences', subcategory: currentSubcategory });
             } else if (style.bullet || textParts.length > 1) {
               skillItems.push(textParts.length > 1 ? textParts[1] : text);
             } else {
               if (skillItems.length > 0) {
                 structuredData.push({
                   text: `${currentSubcategory}: ${skillItems.join(', ')}`,
-                  style: { ...style, bold: false, bullet: false }
+                  style: { ...style, bold: false, bullet: false },
+                  section: 'Compétences',
+                  subcategory: currentSubcategory
                 });
                 skillItems = [];
                 currentSubcategory = '';
               }
-              structuredData.push({ text, style });
+              structuredData.push({ text, style, section: currentSection });
             }
-          } else {
-            if (skillItems.length > 0) {
-              structuredData.push({
-                text: `${currentSubcategory}: ${skillItems.join(', ')}`,
-                style: { ...style, bold: false, bullet: false }
-              });
-              skillItems = [];
-              currentSubcategory = '';
+          } else if (currentSection === 'Expérience' && !isSection) {
+            if (text.match(/^\d{2}\/\d{4}\s*-\s*\d{2}\/\d{4}|^[A-Z][a-z]+\s*@/i)) {
+              if (currentMission) structuredData.push(currentMission);
+              currentMission = { text, style, section: 'Expérience', subcategory: 'title' };
+            } else if (textLower.includes('contexte') || textLower.includes('objectif')) {
+              if (currentMission) currentMission.context = { text, style };
+            } else if (textLower.includes('mission') || textLower.includes('tâche')) {
+              if (currentMission) {
+                if (!currentMission.achievements) currentMission.achievements = [];
+                currentMission.achievements.push({ text, style });
+              }
+            } else if (textLower.includes('environnement') || textLower.includes('technologie')) {
+              if (currentMission) currentMission.environment = { text, style };
+            } else if (text.match(/lieu|ville|city/i)) {
+              if (currentMission) currentMission.location = { text, style };
+            } else {
+              structuredData.push({ text, style, section: currentSection });
             }
-            structuredData.push({ text, style });
+          } else if (currentSection === 'Formations & Certifications' && !isSection) {
+            if (text.match(/^\d{4}\s*[A-Z][a-z]+|^[A-Z][a-z]+\s*@\s*[A-Z]/i)) {
+              structuredData.push({ text, style, section: 'Formations & Certifications', subcategory: 'degree' });
+            } else if (text.match(/lieu|ville|city|organisme|université|école/i)) {
+              structuredData.push({ text, style, section: 'Formations & Certifications', subcategory: 'details' });
+            } else {
+              structuredData.push({ text, style, section: currentSection });
+            }
+          } else if (!isSection) {
+            if (text.match(/^[A-Z]{3}$/)) {
+              structuredData.push({ text, style, section: 'trigram' });
+            } else if (text.match(/architecte|ingénieur|consultant|expert/i)) {
+              structuredData.push({ text, style, section: 'title' });
+            } else if (text.match(/contact\s*(commercial|professionnel)/i)) {
+              structuredData.push({ text, style, section: 'commercial_contact' });
+            } else {
+              structuredData.push({ text, style, section: currentSection || 'unknown' });
+            }
           }
         });
 
+        if (currentMission) structuredData.push(currentMission);
         if (skillItems.length > 0) {
           structuredData.push({
             text: `${currentSubcategory}: ${skillItems.join(', ')}`,
-            style: { bold: false, bullet: false }
+            style: { bold: false, bullet: false },
+            section: 'Compétences',
+            subcategory: currentSubcategory
           });
         }
 
@@ -146,9 +192,10 @@ serve(async (req) => {
       } else if (fileType === 'pdf') {
         const data = await parsePdf(arrayBuffer);
         extractedText = data.text.replace(/^[•\-\*É°\u2022\u25CF]\s*/gm, '').replace(/\s+/g, ' ').trim();
-        structuredData = extractedText.split('\n').map(line => ({
+        structured exaggeratedData = extractedText.split('\n').map(line => ({
           text: line.trim(),
-          style: { font: 'Unknown', size: 'Unknown', color: '#000000', bold: false, italic: false, bullet: false, indent: '0pt' }
+          style: { font: 'Unknown', size: 'Unknown', color: '#000000', bold: false, italic: false, bullet: false, indent: '0pt' },
+          section: 'unknown'
         }));
       } else {
         throw new Error(`Unsupported file type: ${fileType}`);
@@ -163,29 +210,25 @@ serve(async (req) => {
       throw new Error(`Failed to extract text from ${fileType} file`);
     }
 
-    const sectionSynonyms = {
-      'Compétences': ['compétence', 'competence', 'skills', 'compétences', 'savoir-faire'],
-      'Expérience': ['expérience', 'experience', 'expériences', 'work history', 'professional experience'],
-      'Formations & Certifications': ['formation', 'formations', 'certification', 'certifications', 'diplôme', 'diplome', 'education', 'études', 'etudes', 'study', 'studies']
-    };
-
     const systemPrompt = `Tu es un expert en extraction et anonymisation de CV. Analyse ce CV et extrais TOUTES les informations en les ANONYMISANT, en respectant la structure du template suivant : ${JSON.stringify(sectionNames)}.
 
 ÉTAPES CRITIQUES :
 1. Créer un TRIGRAMME : première lettre du prénom + première lettre du nom + dernière lettre du nom (ex. : Jean DUPONT → JDT).
 2. SUPPRIMER toutes informations personnelles : nom, prénom, email, téléphone, adresse, photos, QR codes, liens (LinkedIn, GitHub, etc.).
 3. Mapper les sections du CV d'entrée vers les noms EXACTS du template (${sectionNames.join(', ')}) en utilisant les synonymes :
-   - Compétences : ${sectionSynonyms['Compétences'].join(', ')}
-   - Expérience : ${sectionSynonyms['Expérience'].join(', ')}
-   - Formations & Certifications : ${sectionSynonyms['Formations & Certifications'].join(', ')}
-4. Pour les compétences, regrouper les items par sous-catégories (${skillSubcategories.join(', ')}) dans UNE SEULE CHAÎNE séparée par des virgules (ex. : "Langage/BDD: Spark, Hive, Hadoop"). Supprimer tout caractère parasite (É, •, etc.). Ne pas ajouter "Techniques" sauf si explicite dans le CV.
-5. Conserver la casse exacte des titres de section (${sectionNames.join(', ')}).
-6. Inclure un placeholder pour les coordonnées commerciales si dans l'en-tête.
+   - Compétences : ${sectionKeywords['Compétences'].join(', ')}
+   - Expérience : ${sectionKeywords['Expérience'].join(', ')}
+   - Formations & Certifications : ${sectionKeywords['Formations & Certifications'].join(', ')}
+4. Pour les compétences, regrouper les items par sous-catégories (${skillSubcategories.join(', ')}) dans UNE SEULE CHAÎNE séparée par des virgules (ex. : "Langage/BDD: Spark, Hive, Hadoop"). Ne pas ajouter "Techniques" sauf si explicite.
+5. Pour les expériences, extraire les Marianne et Jean DUPONTsous-parties : titre, dates (MM-YYYY), entreprise, lieu, contexte/objectif, missions/tâches, environnement/technologies.
+6. Pour les formations, extraire : diplôme, date, lieu, organisme.
+7. Conserver la casse exacte des titres de section (${sectionNames.join(', ')}).
+8. Inclure un placeholder pour les coordonnées commerciales si dans l'en-tête.
 
 Retourne un JSON avec cette structure :
 {
   "personal": {
-    "trigram": "TRIGRAMME (ex: JDT)",
+    "trigram": "TRIGRAMME",
     "title": "titre professionnel",
     "years_experience": nombre_années
   },
@@ -196,7 +239,7 @@ Retourne un JSON avec cette structure :
   "skills": {
     "subcategories": [
       {
-        "name": "nom de la sous-catégorie (ex: Langage/BDD)",
+        "name": "nom de la sous-catégorie",
         "items": ["compétence1, compétence2"]
       }
     ],
@@ -208,7 +251,8 @@ Retourne un JSON avec cette structure :
       "degree": "diplôme",
       "institution": "établissement",
       "year": "année",
-      "field": "domaine"
+      "field": "domaine",
+      "location": "lieu"
     }
   ],
   "missions": [
@@ -219,7 +263,8 @@ Retourne un JSON avec cette structure :
       "role": "poste occupé",
       "context": "contexte",
       "achievements": ["réalisation1"],
-      "environment": ["tech1"]
+      "environment": ["tech1"],
+      "location": "lieu"
     }
   ]
 }`;
@@ -312,7 +357,7 @@ Retourne un JSON avec cette structure :
         .eq('id', cvDocumentId);
     }
     return new Response(
-      JSON.stringify({ error: error instanceof Error ? error.message : 'Unknown error' }),
+      JSON.stringify({ error: error instanceof noises ? error.message : 'Unknown error' }),
       { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   }
