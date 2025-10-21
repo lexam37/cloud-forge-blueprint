@@ -23,8 +23,7 @@ serve(async (req) => {
     const { data: cvDoc, error: cvError } = await supabase
       .from('cv_documents')
       .select('extracted_data, cv_templates(structure_data)')
-      .eq('id', cvDocumentId)
-      .single();
+      .eq('idಸ
 
     if (cvError || !cvDoc) throw new Error('CV document not found');
 
@@ -76,6 +75,7 @@ serve(async (req) => {
               size: ptToHalfPt(contactStyle.size || fonts.body_size),
               color: colorToHex(contactStyle.color || colors.text),
               font: contactStyle.font || fonts.body_font,
+              underline: contactStyle.underline ? { type: UnderlineType.SINGLE, color: colorToHex(contactStyle.underline.color) } : undefined,
             }),
           ],
           alignment: contactStyle.paragraph?.alignment === 'center' ? AlignmentType.CENTER : AlignmentType.RIGHT,
@@ -114,6 +114,7 @@ serve(async (req) => {
             size: ptToHalfPt(elementStyles.trigram?.size || fonts.body_size),
             color: colorToHex(elementStyles.trigram?.color || colors.primary),
             font: elementStyles.trigram?.font || fonts.body_font,
+            underline: elementStyles.trigram?.underline ? { type: UnderlineType.SINGLE, color: colorToHex(elementStyles.trigram.underline.color) } : undefined,
           }),
         ],
         spacing: { after: ptToHalfPt(spacing.element_spacing) },
@@ -127,6 +128,7 @@ serve(async (req) => {
             size: ptToHalfPt(elementStyles.title?.size || fonts.body_size),
             color: colorToHex(elementStyles.title?.color || colors.text),
             font: elementStyles.title?.font || fonts.body_font,
+            underline: elementStyles.title?.underline ? { type: UnderlineType.SINGLE, color: colorToHex(elementStyles.title.underline.color) } : undefined,
           }),
         ],
         spacing: { after: ptToHalfPt(spacing.section_spacing) },
@@ -138,7 +140,7 @@ serve(async (req) => {
     console.log('Sections to process:', sections);
     for (const section of sections) {
       const sectionName = section.name;
-      const sectionStyle = section.title_style || { color: "#142D5A", size: "14pt", bold: true, font: "Segoe UI Symbol", case: "mixed" };
+      const sectionStyle = section.title_style || { color: "#142D5A", size: "14pt", bold: true, case: "mixed", font: "Segoe UI Symbol" };
       const sectionData = sectionName.toLowerCase().includes('compétence') ? extractedData.skills :
                          sectionName.toLowerCase().includes('expérience') ? extractedData.missions :
                          sectionName.toLowerCase().includes('formation') ? extractedData.education : [];
@@ -154,7 +156,7 @@ serve(async (req) => {
               size: ptToHalfPt(sectionStyle.size || fonts.title_size),
               color: colorToHex(sectionStyle.color || colors.primary),
               font: sectionStyle.font || fonts.title_font,
-              underline: sectionStyle.underline ? { type: UnderlineType.SINGLE } : undefined,
+              underline: sectionStyle.underline ? { type: UnderlineType.SINGLE, color: colorToHex(sectionStyle.underline.color) } : undefined,
             }),
           ],
           alignment: section.paragraph?.alignment === 'center' ? AlignmentType.CENTER : AlignmentType.LEFT,
@@ -181,13 +183,15 @@ serve(async (req) => {
                   size: ptToHalfPt(subcategoryStyle.size || fonts.body_size),
                   color: colorToHex(subcategoryStyle.color || colors.secondary),
                   font: subcategoryStyle.font || fonts.body_font,
+                  underline: subcategoryStyle.underline ? { type: UnderlineType.SINGLE, color: colorToHex(subcategoryStyle.underline.color) } : undefined,
                 }),
                 new TextRun({
                   text: items,
-                  bold: true, // Items en gras
+                  bold: true,
                   size: ptToHalfPt(elementStyles.skills_item?.size || '11pt'),
                   color: colorToHex(elementStyles.skills_item?.color || '#329696'),
                   font: elementStyles.skills_item?.font || 'Segoe UI Symbol',
+                  underline: elementStyles.skills_item?.underline ? { type: UnderlineType.SINGLE, color: colorToHex(elementStyles.skills_item.underline.color) } : undefined,
                 }),
               ],
               indent: { left: mmToTwip(visualElements.bullets?.indent || '5mm') },
@@ -206,6 +210,7 @@ serve(async (req) => {
                   size: ptToHalfPt(elementStyles.skills_label?.size || fonts.body_size),
                   color: colorToHex(elementStyles.skills_label?.color || colors.secondary),
                   font: elementStyles.skills_label?.font || fonts.body_font,
+                  underline: elementStyles.skills_label?.underline ? { type: UnderlineType.SINGLE, color: colorToHex(elementStyles.skills_label.underline.color) } : undefined,
                 }),
                 new TextRun({
                   text: extractedData.skills.languages.join(', '),
@@ -213,6 +218,7 @@ serve(async (req) => {
                   size: ptToHalfPt(elementStyles.skills_item?.size || '11pt'),
                   color: colorToHex(elementStyles.skills_item?.color || '#329696'),
                   font: elementStyles.skills_item?.font || 'Segoe UI Symbol',
+                  underline: elementStyles.skills_item?.underline ? { type: UnderlineType.SINGLE, color: colorToHex(elementStyles.skills_item.underline.color) } : undefined,
                 }),
               ],
               indent: { left: mmToTwip(visualElements.bullets?.indent || '5mm') },
@@ -231,6 +237,7 @@ serve(async (req) => {
                   size: ptToHalfPt(elementStyles.skills_label?.size || fonts.body_size),
                   color: colorToHex(elementStyles.skills_label?.color || colors.secondary),
                   font: elementStyles.skills_label?.font || fonts.body_font,
+                  underline: elementStyles.skills_label?.underline ? { type: UnderlineType.SINGLE, color: colorToHex(elementStyles.skills_label.underline.color) } : undefined,
                 }),
                 new TextRun({
                   text: extractedData.skills.certifications.join(', '),
@@ -238,6 +245,7 @@ serve(async (req) => {
                   size: ptToHalfPt(elementStyles.skills_item?.size || '11pt'),
                   color: colorToHex(elementStyles.skills_item?.color || '#329696'),
                   font: elementStyles.skills_item?.font || 'Segoe UI Symbol',
+                  underline: elementStyles.skills_item?.underline ? { type: UnderlineType.SINGLE, color: colorToHex(elementStyles.skills_item.underline.color) } : undefined,
                 }),
               ],
               indent: { left: mmToTwip(visualElements.bullets?.indent || '5mm') },
@@ -251,11 +259,12 @@ serve(async (req) => {
             new Paragraph({
               children: [
                 new TextRun({
-                  text: `${mission.date_start || ''} - ${mission.date_end || ''} ${mission.role || ''} @ ${mission.client || 'N/A'}`,
+                  text: `${mission.date_start || ''} - ${mission.date_end || ''} ${mission.role || ''} @ ${mission.client || 'N/A'}${mission.location ? `, ${mission.location}` : ''}`,
                   bold: elementStyles.mission_title?.bold !== false,
                   size: ptToHalfPt(elementStyles.mission_title?.size || fonts.body_size),
                   color: colorToHex(elementStyles.mission_title?.color || colors.primary),
                   font: elementStyles.mission_title?.font || fonts.body_font,
+                  underline: elementStyles.mission_title?.underline ? { type: UnderlineType.SINGLE, color: colorToHex(elementStyles.mission_title.underline.color) } : undefined,
                 }),
               ],
               spacing: { after: ptToHalfPt(spacing.element_spacing) }
@@ -271,6 +280,7 @@ serve(async (req) => {
                     size: ptToHalfPt(elementStyles.mission_context?.size || fonts.body_size),
                     color: colorToHex(elementStyles.mission_context?.color || colors.text),
                     font: elementStyles.mission_context?.font || fonts.body_font,
+                    underline: elementStyles.mission_context?.underline ? { type: UnderlineType.SINGLE, color: colorToHex(elementStyles.mission_context.underline.color) } : undefined,
                   }),
                   new TextRun({
                     text: mission.context,
@@ -278,6 +288,7 @@ serve(async (req) => {
                     size: ptToHalfPt(elementStyles.mission_context?.size || fonts.body_size),
                     color: colorToHex(elementStyles.mission_context?.color || colors.text),
                     font: elementStyles.mission_context?.font || fonts.body_font,
+                    underline: elementStyles.mission_context?.underline ? { type: UnderlineType.SINGLE, color: colorToHex(elementStyles.mission_context.underline.color) } : undefined,
                   }),
                 ],
                 spacing: { after: ptToHalfPt(spacing.element_spacing) }
@@ -294,6 +305,7 @@ serve(async (req) => {
                     size: ptToHalfPt(elementStyles.mission_achievement?.size || fonts.body_size),
                     color: colorToHex(elementStyles.mission_achievement?.color || colors.text),
                     font: elementStyles.mission_achievement?.font || fonts.body_font,
+                    underline: elementStyles.mission_achievement?.underline ? { type: UnderlineType.SINGLE, color: colorToHex(elementStyles.mission_achievement.underline.color) } : undefined,
                   }),
                 ],
                 spacing: { after: ptToHalfPt(spacing.element_spacing) }
@@ -308,6 +320,7 @@ serve(async (req) => {
                       size: ptToHalfPt(elementStyles.mission_achievement?.size || fonts.body_size),
                       color: colorToHex(elementStyles.mission_achievement?.color || colors.text),
                       font: elementStyles.mission_achievement?.font || fonts.body_font,
+                      underline: elementStyles.mission_achievement?.underline ? { type: UnderlineType.SINGLE, color: colorToHex(elementStyles.mission_achievement.underline.color) } : undefined,
                     }),
                   ],
                   indent: { left: mmToTwip(visualElements.bullets?.indent || '5mm') },
@@ -326,12 +339,14 @@ serve(async (req) => {
                     size: ptToHalfPt(elementStyles.mission_environment?.size || fonts.body_size),
                     color: colorToHex(elementStyles.mission_environment?.color || colors.text),
                     font: elementStyles.mission_environment?.font || fonts.body_font,
+                    underline: elementStyles.mission_environment?.underline ? { type: UnderlineType.SINGLE, color: colorToHex(elementStyles.mission_environment.underline.color) } : undefined,
                   }),
                   new TextRun({
                     text: mission.environment.join(', '),
                     size: ptToHalfPt(elementStyles.mission_environment?.size || fonts.body_size),
                     color: colorToHex(elementStyles.mission_environment?.color || colors.text),
                     font: elementStyles.mission_environment?.font || fonts.body_font,
+                    underline: elementStyles.mission_environment?.underline ? { type: UnderlineType.SINGLE, color: colorToHex(elementStyles.mission_environment.underline.color) } : undefined,
                   }),
                 ],
                 spacing: { after: ptToHalfPt(spacing.element_spacing) }
@@ -345,11 +360,12 @@ serve(async (req) => {
             new Paragraph({
               children: [
                 new TextRun({
-                  text: `${edu.year || ''} ${edu.degree || 'N/A'} @ ${edu.institution || ''}`,
+                  text: `${edu.year || ''} ${edu.degree || 'N/A'} @ ${edu.institution || ''}${edu.location ? `, ${edu.location}` : ''}`,
                   bold: elementStyles.education_degree?.bold !== false,
                   size: ptToHalfPt(elementStyles.education_degree?.size || fonts.body_size),
                   color: colorToHex(elementStyles.education_degree?.color || colors.text),
                   font: elementStyles.education_degree?.font || fonts.body_font,
+                  underline: elementStyles.education_degree?.underline ? { type: UnderlineType.SINGLE, color: colorToHex(elementStyles.education_degree.underline.color) } : undefined,
                 }),
               ],
               spacing: { after: ptToHalfPt(spacing.element_spacing) }
@@ -364,6 +380,7 @@ serve(async (req) => {
                     size: ptToHalfPt(elementStyles.education_place?.size || fonts.body_size),
                     color: colorToHex(elementStyles.education_place?.color || colors.text),
                     font: elementStyles.education_place?.font || fonts.body_font,
+                    underline: elementStyles.education_place?.underline ? { type: UnderlineType.SINGLE, color: colorToHex(elementStyles.education_place.underline.color) } : undefined,
                   }),
                 ],
                 spacing: { after: ptToHalfPt(spacing.element_spacing) }
