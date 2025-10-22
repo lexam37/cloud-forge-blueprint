@@ -10,8 +10,8 @@ import Dashboard from "./pages/Dashboard";
 import NotFound from "./pages/NotFound";
 import AuthComponent from "./components/Auth";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import HistoryTab from './components/HistoryTab';
-import TemplateTab from './components/TemplateTab';
+import CVHistoryList from './components/dashboard/CVHistoryList';
+import TemplateManagement from './components/dashboard/TemplateManagement';
 
 const queryClient = new QueryClient();
 
@@ -50,10 +50,10 @@ const App = () => {
                       <TabsTrigger value="templates">Templates</TabsTrigger>
                     </TabsList>
                     <TabsContent value="historique">
-                      <HistoryTab />
+                      <CVHistoryList />
                     </TabsContent>
                     <TabsContent value="templates">
-                      <TemplateTab />
+                      <TemplateManagement />
                     </TabsContent>
                   </Tabs>
                 ) : (
