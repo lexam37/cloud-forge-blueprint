@@ -23,53 +23,87 @@ export const CVHistoryList = () => {
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const { toast } = useToast();
   const handleDeleteAllCVsAndClearCache = async () => {
-  if (!confirm("Êtes-vous sûr de vouloir supprimer tous les CV et vider le cache ? Cette action est irréversible.")) {
-    return;
-  }
-
-  setIsLoading(true);
-  try {
-    // Supprimer tous les fichiers des buckets 'cv-uploads' et 'cv-generated'
-    const buckets = ['cv-uploads', 'cv-generated'];
-    for (const bucket of buckets) {
-      const { data: files, error: listError } = await supabase.storage.from(bucket).list();
-      if (listError) throw listError;
-      if (files && files.length > 0) {
-        const paths = files.map(file => file.name);
-        const { error: deleteError } = await supabase.storage.from(bucket).remove(paths);
-        if (deleteError) throw deleteError;
+    if (!confirm("Êtes-vous sûr de vouloir supprimer tous les CV et vider le cache ? Cette action est irréversible.")) {
+      return;
+    }
+  
+    setIsLoading(true);
+    try {
+      // Étape 1: Récupérer tous les enregistrements de cv_documents
+      const { data: cvDocs, error: fetchError } = await supabase
+        .from('cv_documents')
+        .select('*');
+  
+      if (fetchError) {
+        console.error('Erreur lors de la récupération des CV:', fetchError);
+        throw new Error(`Échec récupération des CV: ${fetchError.message}`);
       }
+  
+      if (!cvDocs || cvDocs.length === 0) {
+        console.log('Aucun CV à supprimer.');
+      } else {
+        // Étape 2: Supprimer chaque CV individuellement (comme handleDeleteCV)
+        for (const cv of cvDocs) {
+          // Supprimer le fichier original
+          const { error: storageError } = await supabase.storage
+            .from('cv-uploads')
+            .remove([cv.original_file_path]);
+  
+          if (storageError) {
+            console.error(`Erreur suppression fichier original ${cv.original_file_path}:`, storageError);
+          }
+  
+          // Supprimer le fichier généré s'il existe
+          if (cv.generated_file_path) {
+            const { error: generatedError } = await supabase.storage
+              .from('cv-generated')
+              .remove([cv.generated_file_path]);
+            if (generatedError) {
+              console.error(`Erreur suppression fichier généré ${cv.generated_file_path}:`, generatedError);
+            }
+          }
+  
+          // Supprimer l'enregistrement de la DB
+          const { error: dbError } = await supabase
+            .from('cv_documents')
+            .delete()
+            .eq('id', cv.id);
+  
+          if (dbError) {
+            console.error(`Erreur suppression DB pour CV ${cv.id}:`, dbError);
+            throw new Error(`Échec suppression DB pour CV ${cv.id}: ${dbError.message}`);
+          }
+        }
+      }
+  
+      // Étape 3: Vider le cache du navigateur
+      if ('caches' in window) {
+        const cacheNames = await caches.keys();
+        await Promise.all(cacheNames.map(name => caches.delete(name)));
+        console.log('Caches du navigateur vidés.');
+      }
+      localStorage.clear();
+      console.log('localStorage vidé.');
+  
+      // Étape 4: Rafraîchir la liste
+      setCvDocuments([]);
+      toast({
+        title: "Succès",
+        description: "Tous les CV ont été supprimés et le cache vidé.",
+      });
+  
+      // Optionnel: Recharger la page
+      window.location.reload();
+    } catch (error) {
+      console.error('Erreur lors de la suppression globale:', error);
+      toast({
+        variant: "destructive",
+        title: "Erreur",
+        description: `Impossible de supprimer les CV ou vider le cache: ${error.message}`,
+      });
+    } finally {
+      setIsLoading(false);
     }
-
-    // Supprimer tous les enregistrements de la table 'cv_documents'
-    const { error: dbError } = await supabase.from('cv_documents').delete().neq('id', ''); // Supprime tout
-    if (dbError) throw dbError;
-
-    // Vider le cache du navigateur
-    if ('caches' in window) {
-      const cacheNames = await caches.keys();
-      await Promise.all(cacheNames.map(name => caches.delete(name)));
-    }
-    localStorage.clear();
-
-    // Rafraîchir la liste
-    setCvDocuments([]);
-    toast({
-      title: "Succès",
-      description: "Tous les CV ont été supprimés et le cache vidé.",
-    });
-    // Optionnel : recharger la page
-    window.location.reload();
-  } catch (error) {
-    console.error('Erreur lors de la suppression:', error);
-    toast({
-      variant: "destructive",
-      title: "Erreur",
-      description: "Impossible de supprimer les CV ou vider le cache.",
-    });
-  } finally {
-    setIsLoading(false);
-  }
   };
 
   useEffect(() => {
