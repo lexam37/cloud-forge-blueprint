@@ -1,6 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { Document, Packer, Paragraph, TextRun, AlignmentType, ImageRun, UnderlineType, convertMillimetersToTwip } from "https://esm.sh/docx@8.5.0";
+import { Document, Packer, Paragraph, TextRun, AlignmentType, ImageRun, UnderlineType, convertMillimetersToTwip, Header, Footer } from "https://esm.sh/docx@8.5.0";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -23,7 +23,8 @@ serve(async (req) => {
     const { data: cvDoc, error: cvError } = await supabase
       .from('cv_documents')
       .select('extracted_data, cv_templates(structure_data)')
-      .eq('idಸ
+      .eq('id', cvDocumentId)
+      .single();
 
     if (cvError || !cvDoc) throw new Error('CV document not found');
 
@@ -40,7 +41,7 @@ serve(async (req) => {
       { name: "Expérience", title_style: { color: "#142D5A", size: "14pt", bold: true, case: "mixed", font: "Segoe UI Symbol" } },
       { name: "Formations & Certifications", title_style: { color: "#142D5A", size: "14pt", bold: true, case: "mixed", font: "Segoe UI Symbol" } }
     ];
-    const visualElements = templateStyle.visual_elements || {};
+    const visualElements = templateStyle.visual_elements || { header: {}, footer: {} };
     const elementStyles = templateStyle.element_styles || {};
 
     const ptToHalfPt = (pt: string) => parseInt(pt.replace('pt', '')) * 2;
@@ -48,7 +49,7 @@ serve(async (req) => {
     const mmToTwip = (mm: string) => convertMillimetersToTwip(parseInt(mm.replace('mm', '')));
 
     let logoImage = null;
-    const logoPath = visualElements.logo?.extracted_logo_path;
+    const logoPath = visualElements.header?.logo?.extracted_logo_path || visualElements.footer?.logo?.extracted_logo_path;
     if (logoPath) {
       try {
         const { data: logoData } = await supabase.storage.from('company-logos').download(logoPath);
@@ -61,16 +62,17 @@ serve(async (req) => {
       }
     }
 
-    const children = [];
-    const headers = [];
+    const headerChildren = [];
+    const footerChildren = [];
 
-    if (extractedData.commercial_contact?.enabled) {
+    // En-tête
+    if (extractedData.header?.commercial_contact?.enabled) {
       const contactStyle = elementStyles.commercial_contact || {};
-      headers.push(
+      headerChildren.push(
         new Paragraph({
           children: [
             new TextRun({
-              text: extractedData.commercial_contact.text || 'Contact Commercial',
+              text: extractedData.header.commercial_contact.text || 'Contact Commercial',
               bold: contactStyle.bold !== false,
               size: ptToHalfPt(contactStyle.size || fonts.body_size),
               color: colorToHex(contactStyle.color || colors.text),
@@ -78,18 +80,18 @@ serve(async (req) => {
               underline: contactStyle.underline ? { type: UnderlineType.SINGLE, color: colorToHex(contactStyle.underline.color) } : undefined,
             }),
           ],
-          alignment: contactStyle.paragraph?.alignment === 'center' ? AlignmentType.CENTER : AlignmentType.RIGHT,
-          spacing: { after: 120 }
+          alignment: contactStyle.alignment === 'center' ? AlignmentType.CENTER : AlignmentType.RIGHT,
+          spacing: { before: ptToHalfPt(contactStyle.spacingBefore || '0pt'), after: ptToHalfPt(contactStyle.spacingAfter || '6pt'), line: ptToHalfPt(contactStyle.lineHeight || '1.15') }
         })
       );
     }
 
-    if (logoImage && visualElements.logo?.position === 'header') {
-      const widthPoints = (visualElements.logo.width_emu / 914400) * 72;
-      const heightPoints = (visualElements.logo.height_emu / 914400) * 72;
-      const alignment = visualElements.logo.alignment === 'center' ? AlignmentType.CENTER : visualElements.logo.alignment === 'right' ? AlignmentType.RIGHT : AlignmentType.LEFT;
+    if (logoImage && visualElements.header?.logo?.present) {
+      const widthPoints = (visualElements.header.logo.width_emu / 914400) * 72;
+      const heightPoints = (visualElements.header.logo.height_emu / 914400) * 72;
+      const alignment = visualElements.header.logo.alignment === 'center' ? AlignmentType.CENTER : AlignmentType.LEFT;
 
-      headers.push(
+      headerChildren.push(
         new Paragraph({
           children: [
             new ImageRun({
@@ -103,40 +105,89 @@ serve(async (req) => {
       );
     }
 
-    const trigram = extractedData.personal?.trigram || 'XXX';
-    const title = extractedData.personal?.title || '';
-    children.push(
-      new Paragraph({
-        children: [
-          new TextRun({ 
-            text: trigram,
-            bold: elementStyles.trigram?.bold !== false,
-            size: ptToHalfPt(elementStyles.trigram?.size || fonts.body_size),
-            color: colorToHex(elementStyles.trigram?.color || colors.primary),
-            font: elementStyles.trigram?.font || fonts.body_font,
-            underline: elementStyles.trigram?.underline ? { type: UnderlineType.SINGLE, color: colorToHex(elementStyles.trigram.underline.color) } : undefined,
-          }),
-        ],
-        spacing: { after: ptToHalfPt(spacing.element_spacing) },
-        alignment: elementStyles.trigram?.paragraph?.alignment === 'center' ? AlignmentType.CENTER : AlignmentType.LEFT
-      }),
-      new Paragraph({
-        children: [
-          new TextRun({ 
-            text: title,
-            bold: elementStyles.title?.bold !== false,
-            size: ptToHalfPt(elementStyles.title?.size || fonts.body_size),
-            color: colorToHex(elementStyles.title?.color || colors.text),
-            font: elementStyles.title?.font || fonts.body_font,
-            underline: elementStyles.title?.underline ? { type: UnderlineType.SINGLE, color: colorToHex(elementStyles.title.underline.color) } : undefined,
-          }),
-        ],
-        spacing: { after: ptToHalfPt(spacing.section_spacing) },
-        alignment: elementStyles.title?.paragraph?.alignment === 'center' ? AlignmentType.CENTER : AlignmentType.LEFT
-      }),
-      new Paragraph({ text: '' })
-    );
+    if (extractedData.header?.trigram) {
+      const trigramStyle = elementStyles.trigram || {};
+      headerChildren.push(
+        new Paragraph({
+          children: [
+            new TextRun({
+              text: extractedData.header.trigram,
+              bold: trigramStyle.bold !== false,
+              size: ptToHalfPt(trigramStyle.size || fonts.body_size),
+              color: colorToHex(trigramStyle.color || colors.primary),
+              font: trigramStyle.font || fonts.body_font,
+              underline: trigramStyle.underline ? { type: UnderlineType.SINGLE, color: colorToHex(trigramStyle.underline.color) } : undefined,
+            }),
+          ],
+          alignment: trigramStyle.alignment === 'center' ? AlignmentType.CENTER : AlignmentType.LEFT,
+          spacing: { before: ptToHalfPt(trigramStyle.spacingBefore || '0pt'), after: ptToHalfPt(trigramStyle.spacingAfter || '6pt'), line: ptToHalfPt(trigramStyle.lineHeight || '1.15') }
+        })
+      );
+    }
 
+    if (extractedData.header?.title) {
+      const titleStyle = elementStyles.title || {};
+      headerChildren.push(
+        new Paragraph({
+          children: [
+            new TextRun({
+              text: extractedData.header.title,
+              bold: titleStyle.bold !== false,
+              size: ptToHalfPt(titleStyle.size || fonts.body_size),
+              color: colorToHex(titleStyle.color || colors.primary),
+              font: titleStyle.font || fonts.body_font,
+              underline: titleStyle.underline ? { type: UnderlineType.SINGLE, color: colorToHex(titleStyle.underline.color) } : undefined,
+            }),
+          ],
+          alignment: titleStyle.alignment === 'center' ? AlignmentType.CENTER : AlignmentType.LEFT,
+          spacing: { before: ptToHalfPt(titleStyle.spacingBefore || '0pt'), after: ptToHalfPt(titleStyle.spacingAfter || '6pt'), line: ptToHalfPt(titleStyle.lineHeight || '1.15') }
+        })
+      );
+    }
+
+    // Pied de page
+    if (extractedData.footer?.text) {
+      const footerStyle = visualElements.footer?.text || {};
+      footerChildren.push(
+        new Paragraph({
+          children: [
+            new TextRun({
+              text: extractedData.footer.text,
+              bold: footerStyle.bold !== false,
+              size: ptToHalfPt(footerStyle.size || '10pt'),
+              color: colorToHex(footerStyle.color || colors.text),
+              font: footerStyle.font || fonts.body_font,
+              underline: footerStyle.underline ? { type: UnderlineType.SINGLE, color: colorToHex(footerStyle.underline.color) } : undefined,
+            }),
+          ],
+          alignment: footerStyle.alignment === 'center' ? AlignmentType.CENTER : AlignmentType.LEFT,
+          spacing: { before: ptToHalfPt(footerStyle.spacingBefore || '0pt'), after: ptToHalfPt(footerStyle.spacingAfter || '0pt'), line: ptToHalfPt(footerStyle.lineHeight || '1.15') }
+        })
+      );
+    }
+
+    if (logoImage && visualElements.footer?.logo?.present) {
+      const widthPoints = (visualElements.footer.logo.width_emu / 914400) * 72;
+      const heightPoints = (visualElements.footer.logo.height_emu / 914400) * 72;
+      const alignment = visualElements.footer.logo.alignment === 'center' ? AlignmentType.CENTER : AlignmentType.LEFT;
+
+      footerChildren.push(
+        new Paragraph({
+          children: [
+            new ImageRun({
+              data: logoImage,
+              transformation: { width: widthPoints, height: heightPoints },
+            }),
+          ],
+          alignment,
+          spacing: { after: 120 }
+        })
+      );
+    }
+
+    const children = [];
+
+    // Corps du document
     console.log('Sections to process:', sections);
     for (const section of sections) {
       const sectionName = section.name;
@@ -163,6 +214,7 @@ serve(async (req) => {
           spacing: {
             before: mmToTwip(section.spacing?.top || spacing.section_spacing),
             after: mmToTwip(section.spacing?.bottom || spacing.element_spacing),
+            line: ptToHalfPt(sectionStyle.lineHeight || '1.15')
           }
         })
       );
@@ -194,8 +246,8 @@ serve(async (req) => {
                   underline: elementStyles.skills_item?.underline ? { type: UnderlineType.SINGLE, color: colorToHex(elementStyles.skills_item.underline.color) } : undefined,
                 }),
               ],
-              indent: { left: mmToTwip(visualElements.bullets?.indent || '5mm') },
-              spacing: { after: ptToHalfPt(spacing.element_spacing) }
+              indent: { left: mmToTwip(subcategoryStyle.indent || '5mm') },
+              spacing: { after: ptToHalfPt(subcategoryStyle.spacingAfter || spacing.element_spacing), line: ptToHalfPt(subcategoryStyle.lineHeight || '1.15') }
             })
           );
         }
@@ -221,8 +273,8 @@ serve(async (req) => {
                   underline: elementStyles.skills_item?.underline ? { type: UnderlineType.SINGLE, color: colorToHex(elementStyles.skills_item.underline.color) } : undefined,
                 }),
               ],
-              indent: { left: mmToTwip(visualElements.bullets?.indent || '5mm') },
-              spacing: { after: ptToHalfPt(spacing.element_spacing) }
+              indent: { left: mmToTwip(elementStyles.skills_label?.indent || '5mm') },
+              spacing: { after: ptToHalfPt(elementStyles.skills_label?.spacingAfter || spacing.element_spacing), line: ptToHalfPt(elementStyles.skills_label?.lineHeight || '1.15') }
             })
           );
         }
@@ -248,8 +300,8 @@ serve(async (req) => {
                   underline: elementStyles.skills_item?.underline ? { type: UnderlineType.SINGLE, color: colorToHex(elementStyles.skills_item.underline.color) } : undefined,
                 }),
               ],
-              indent: { left: mmToTwip(visualElements.bullets?.indent || '5mm') },
-              spacing: { after: ptToHalfPt(spacing.element_spacing) }
+              indent: { left: mmToTwip(elementStyles.skills_label?.indent || '5mm') },
+              spacing: { after: ptToHalfPt(elementStyles.skills_label?.spacingAfter || spacing.element_spacing), line: ptToHalfPt(elementStyles.skills_label?.lineHeight || '1.15') }
             })
           );
         }
@@ -261,13 +313,18 @@ serve(async (req) => {
                 new TextRun({
                   text: `${mission.date_start || ''} - ${mission.date_end || ''} ${mission.role || ''} @ ${mission.client || 'N/A'}${mission.location ? `, ${mission.location}` : ''}`,
                   bold: elementStyles.mission_title?.bold !== false,
-                  size: ptToHalfPt(elementStyles.mission_title?.size || fonts.body_size),
-                  color: colorToHex(elementStyles.mission_title?.color || colors.primary),
-                  font: elementStyles.mission_title?.font || fonts.body_font,
+                  size: ptToHalfPt(elementStyles.mission_title?.size || '11pt'),
+                  color: colorToHex(elementStyles.mission_title?.color || '#142D5A'),
+                  font: elementStyles.mission_title?.font || 'Segoe UI Symbol',
                   underline: elementStyles.mission_title?.underline ? { type: UnderlineType.SINGLE, color: colorToHex(elementStyles.mission_title.underline.color) } : undefined,
                 }),
               ],
-              spacing: { after: ptToHalfPt(spacing.element_spacing) }
+              indent: { left: mmToTwip(elementStyles.mission_title?.indent || '0mm') },
+              spacing: { 
+                before: ptToHalfPt(elementStyles.mission_title?.spacingBefore || '0pt'), 
+                after: ptToHalfPt(elementStyles.mission_title?.spacingAfter || '6pt'), 
+                line: ptToHalfPt(elementStyles.mission_title?.lineHeight || '1.15') 
+              }
             })
           );
           if (mission.context) {
@@ -291,7 +348,8 @@ serve(async (req) => {
                     underline: elementStyles.mission_context?.underline ? { type: UnderlineType.SINGLE, color: colorToHex(elementStyles.mission_context.underline.color) } : undefined,
                   }),
                 ],
-                spacing: { after: ptToHalfPt(spacing.element_spacing) }
+                indent: { left: mmToTwip(elementStyles.mission_context?.indent || '0mm') },
+                spacing: { after: ptToHalfPt(elementStyles.mission_context?.spacingAfter || spacing.element_spacing), line: ptToHalfPt(elementStyles.mission_context?.lineHeight || '1.15') }
               })
             );
           }
@@ -308,7 +366,7 @@ serve(async (req) => {
                     underline: elementStyles.mission_achievement?.underline ? { type: UnderlineType.SINGLE, color: colorToHex(elementStyles.mission_achievement.underline.color) } : undefined,
                   }),
                 ],
-                spacing: { after: ptToHalfPt(spacing.element_spacing) }
+                spacing: { after: ptToHalfPt(elementStyles.mission_achievement?.spacingAfter || spacing.element_spacing), line: ptToHalfPt(elementStyles.mission_achievement?.lineHeight || '1.15') }
               })
             );
             for (const achievement of mission.achievements) {
@@ -323,8 +381,8 @@ serve(async (req) => {
                       underline: elementStyles.mission_achievement?.underline ? { type: UnderlineType.SINGLE, color: colorToHex(elementStyles.mission_achievement.underline.color) } : undefined,
                     }),
                   ],
-                  indent: { left: mmToTwip(visualElements.bullets?.indent || '5mm') },
-                  spacing: { after: ptToHalfPt(spacing.element_spacing) }
+                  indent: { left: mmToTwip(elementStyles.mission_achievement?.indent || '5mm') },
+                  spacing: { after: ptToHalfPt(elementStyles.mission_achievement?.spacingAfter || spacing.element_spacing), line: ptToHalfPt(elementStyles.mission_achievement?.lineHeight || '1.15') }
                 })
               );
             }
@@ -349,7 +407,8 @@ serve(async (req) => {
                     underline: elementStyles.mission_environment?.underline ? { type: UnderlineType.SINGLE, color: colorToHex(elementStyles.mission_environment.underline.color) } : undefined,
                   }),
                 ],
-                spacing: { after: ptToHalfPt(spacing.element_spacing) }
+                indent: { left: mmToTwip(elementStyles.mission_environment?.indent || '0mm') },
+                spacing: { after: ptToHalfPt(elementStyles.mission_environment?.spacingAfter || spacing.element_spacing), line: ptToHalfPt(elementStyles.mission_environment?.lineHeight || '1.15') }
               })
             );
           }
@@ -368,7 +427,8 @@ serve(async (req) => {
                   underline: elementStyles.education_degree?.underline ? { type: UnderlineType.SINGLE, color: colorToHex(elementStyles.education_degree.underline.color) } : undefined,
                 }),
               ],
-              spacing: { after: ptToHalfPt(spacing.element_spacing) }
+              indent: { left: mmToTwip(elementStyles.education_degree?.indent || '0mm') },
+              spacing: { after: ptToHalfPt(elementStyles.education_degree?.spacingAfter || spacing.element_spacing), line: ptToHalfPt(elementStyles.education_degree?.lineHeight || '1.15') }
             })
           );
           if (edu.field) {
@@ -383,7 +443,8 @@ serve(async (req) => {
                     underline: elementStyles.education_place?.underline ? { type: UnderlineType.SINGLE, color: colorToHex(elementStyles.education_place.underline.color) } : undefined,
                   }),
                 ],
-                spacing: { after: ptToHalfPt(spacing.element_spacing) }
+                indent: { left: mmToTwip(elementStyles.education_place?.indent || '0mm') },
+                spacing: { after: ptToHalfPt(elementStyles.education_place?.spacingAfter || spacing.element_spacing), line: ptToHalfPt(elementStyles.education_place?.lineHeight || '1.15') }
               })
             );
           }
@@ -406,7 +467,8 @@ serve(async (req) => {
             },
           },
         },
-        headers: headers.length > 0 ? { default: new Header({ children: headers }) } : undefined,
+        headers: headerChildren.length > 0 ? { default: new Header({ children: headerChildren }) } : undefined,
+        footers: footerChildren.length > 0 ? { default: new Footer({ children: footerChildren }) } : undefined,
         children,
       }],
     });
@@ -414,7 +476,7 @@ serve(async (req) => {
     const buffer = await Packer.toBuffer(doc);
     const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
 
-    const fileName = `${trigram} CV.docx`;
+    const fileName = `${extractedData.header?.trigram || 'XXX'} CV.docx`;
     const filePath = `generated-${Date.now()}-${fileName}`;
 
     const { error: uploadError } = await supabase.storage
