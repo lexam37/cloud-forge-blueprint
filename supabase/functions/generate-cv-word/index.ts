@@ -36,12 +36,8 @@ serve(async (req) => {
     const colors = templateStyle.colors || { primary: "#142D5A", text: "#000000", secondary: "#329696" };
     const fonts = templateStyle.fonts || { title_font: "Segoe UI Symbol", body_font: "Segoe UI Symbol", title_size: "14pt", body_size: "11pt", title_weight: "bold", line_height: "1.15" };
     const spacing = templateStyle.spacing || { section_spacing: "12pt", element_spacing: "6pt", padding: "10mm", line_spacing: "1.15" };
-    const sections = templateStyle.sections || [
-      { name: "Compétences", title_style: { color: "#142D5A", size: "14pt", bold: true, case: "mixed", font: "Segoe UI Symbol" } },
-      { name: "Expérience", title_style: { color: "#142D5A", size: "14pt", bold: true, case: "mixed", font: "Segoe UI Symbol" } },
-      { name: "Formations & Certifications", title_style: { color: "#142D5A", size: "14pt", bold: true, case: "mixed", font: "Segoe UI Symbol" } }
-    ];
-    const visualElements = templateStyle.visual_elements || { header: {}, footer: {} };
+    const sections = templateStyle.sections || [];
+    const visualElements = templateStyle.visual_elements || {};
     const elementStyles = templateStyle.element_styles || {};
 
     const ptToHalfPt = (pt: string) => parseInt(pt.replace('pt', '')) * 2;
@@ -49,7 +45,7 @@ serve(async (req) => {
     const mmToTwip = (mm: string) => convertMillimetersToTwip(parseInt(mm.replace('mm', '')));
 
     let logoImage = null;
-    const logoPath = visualElements.header?.logo?.extracted_logo_path || visualElements.footer?.logo?.extracted_logo_path;
+    const logoPath = visualElements.logo?.extracted_logo_path;
     if (logoPath) {
       try {
         const { data: logoData } = await supabase.storage.from('company-logos').download(logoPath);
@@ -65,7 +61,7 @@ serve(async (req) => {
     const headerChildren = [];
     const footerChildren = [];
 
-    // En-tête
+    // En-tête : logo, coordonnées commerciales, trigramme, titre
     if (extractedData.header?.commercial_contact?.enabled) {
       const contactStyle = elementStyles.commercial_contact || {};
       headerChildren.push(
@@ -86,10 +82,10 @@ serve(async (req) => {
       );
     }
 
-    if (logoImage && visualElements.header?.logo?.present) {
-      const widthPoints = (visualElements.header.logo.width_emu / 914400) * 72;
-      const heightPoints = (visualElements.header.logo.height_emu / 914400) * 72;
-      const alignment = visualElements.header.logo.alignment === 'center' ? AlignmentType.CENTER : AlignmentType.LEFT;
+    if (logoImage && visualElements.logo?.present && visualElements.logo?.position === 'header') {
+      const widthPoints = (visualElements.logo.width_emu / 914400) * 72;
+      const heightPoints = (visualElements.logo.height_emu / 914400) * 72;
+      const alignment = visualElements.logo.alignment === 'center' ? AlignmentType.CENTER : AlignmentType.LEFT;
 
       headerChildren.push(
         new Paragraph({
@@ -134,7 +130,7 @@ serve(async (req) => {
               text: extractedData.header.title,
               bold: titleStyle.bold !== false,
               size: ptToHalfPt(titleStyle.size || fonts.body_size),
-              color: colorToHex(titleStyle.color || colors.primary),
+              color: colorToHex(titleStyle.color || colors.text),
               font: titleStyle.font || fonts.body_font,
               underline: titleStyle.underline ? { type: UnderlineType.SINGLE, color: colorToHex(titleStyle.underline.color) } : undefined,
             }),
@@ -145,9 +141,9 @@ serve(async (req) => {
       );
     }
 
-    // Pied de page
+    // Pied de page : texte
     if (extractedData.footer?.text) {
-      const footerStyle = visualElements.footer?.text || {};
+      const footerStyle = elementStyles.footer?.text || {};
       footerChildren.push(
         new Paragraph({
           children: [
@@ -166,10 +162,10 @@ serve(async (req) => {
       );
     }
 
-    if (logoImage && visualElements.footer?.logo?.present) {
-      const widthPoints = (visualElements.footer.logo.width_emu / 914400) * 72;
-      const heightPoints = (visualElements.footer.logo.height_emu / 914400) * 72;
-      const alignment = visualElements.footer.logo.alignment === 'center' ? AlignmentType.CENTER : AlignmentType.LEFT;
+    if (logoImage && visualElements.logo?.present && visualElements.logo?.position === 'footer') {
+      const widthPoints = (visualElements.logo.width_emu / 914400) * 72;
+      const heightPoints = (visualElements.logo.height_emu / 914400) * 72;
+      const alignment = visualElements.logo.alignment === 'center' ? AlignmentType.CENTER : AlignmentType.LEFT;
 
       footerChildren.push(
         new Paragraph({
@@ -195,8 +191,6 @@ serve(async (req) => {
       const sectionData = sectionName.toLowerCase().includes('compétence') ? extractedData.skills :
                          sectionName.toLowerCase().includes('expérience') ? extractedData.missions :
                          sectionName.toLowerCase().includes('formation') ? extractedData.education : [];
-
-      console.log(`Processing section: ${sectionName}`, JSON.stringify(sectionData, null, 2));
 
       children.push(
         new Paragraph({
@@ -320,11 +314,7 @@ serve(async (req) => {
                 }),
               ],
               indent: { left: mmToTwip(elementStyles.mission_title?.indent || '0mm') },
-              spacing: { 
-                before: ptToHalfPt(elementStyles.mission_title?.spacingBefore || '0pt'), 
-                after: ptToHalfPt(elementStyles.mission_title?.spacingAfter || '6pt'), 
-                line: ptToHalfPt(elementStyles.mission_title?.lineHeight || '1.15') 
-              }
+              spacing: { after: ptToHalfPt(elementStyles.mission_title?.spacingAfter || '6pt'), line: ptToHalfPt(elementStyles.mission_title?.lineHeight || '1.15') }
             })
           );
           if (mission.context) {
@@ -444,7 +434,7 @@ serve(async (req) => {
                   }),
                 ],
                 indent: { left: mmToTwip(elementStyles.education_place?.indent || '0mm') },
-                spacing: { after: ptToHalfPt(elementStyles.education_place?.spacingAfter || spacing.element_spacing), line: ptToHalfPt(elementStyles.education_place?.lineHeight || '1.15') }
+                spacing: { after: ptToHalfPt(elementStyles.education_place?.spacingAfter || spacing.element_spacing), line: ptToHalfPt(elementStyles.skills_place?.lineHeight || '1.15') }
               })
             );
           }
@@ -499,7 +489,7 @@ serve(async (req) => {
 
     return new Response(
       JSON.stringify({ 
-        success: true, 
+        success: true,
         filePath,
         fileName,
         message: 'CV Word généré avec succès'
