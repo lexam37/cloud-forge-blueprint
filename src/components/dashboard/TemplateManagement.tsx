@@ -25,6 +25,77 @@ export const TemplateManagement = () => {
   const [isAnalyzing, setIsAnalyzing] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const { toast } = useToast();
+  const handleDeleteAllTemplatesAndClearCache = async () => {
+    if (!confirm("Êtes-vous sûr de vouloir supprimer tous les templates et vider le cache ? Cette action est irréversible.")) {
+      return;
+    }
+  
+    setIsLoading(true);
+    try {
+      // Étape 1: Récupérer tous les templates de la table cv_templates
+      const { data: templateDocs, error: fetchError } = await supabase
+        .from('cv_templates')
+        .select('*');
+  
+      if (fetchError) {
+        console.error('Erreur lors de la récupération des templates:', fetchError);
+        throw new Error(`Échec récupération des templates: ${fetchError.message}`);
+      }
+  
+      if (!templateDocs || templateDocs.length === 0) {
+        console.log('Aucun template à supprimer.');
+      } else {
+        // Étape 2: Supprimer chaque template individuellement
+        for (const template of templateDocs) {
+          // Supprimer le fichier du storage
+          const { error: storageError } = await supabase.storage
+            .from('cv-templates')
+            .remove([template.file_path]);
+  
+          if (storageError) {
+            console.error(`Erreur suppression fichier ${template.file_path}:`, storageError);
+          }
+  
+          // Supprimer l'enregistrement de la DB
+          const { error: dbError } = await supabase
+            .from('cv_templates')
+            .delete()
+            .eq('id', template.id);
+  
+          if (dbError) {
+            console.error(`Erreur suppression DB pour template ${template.id}:`, dbError);
+            throw new Error(`Échec suppression DB pour template ${template.id}: ${dbError.message}`);
+          }
+        }
+      }
+  
+      // Étape 3: Vider le cache du navigateur
+      if ('caches' in window) {
+        const cacheNames = await caches.keys();
+        await Promise.all(cacheNames.map(name => caches.delete(name)));
+        console.log('Caches du navigateur vidés.');
+      }
+      localStorage.clear();
+      console.log('localStorage vidé.');
+  
+      // Étape 4: Rafraîchir la liste
+      setTemplates([]);
+      toast({
+        title: "Succès",
+        description: "Tous les templates ont été supprimés et le cache vidé.",
+      });
+      window.location.reload();
+    } catch (error) {
+      console.error('Erreur lors de la suppression globale:', error);
+      toast({
+        variant: "destructive",
+        title: "Erreur",
+        description: `Impossible de supprimer les templates ou vider le cache: ${error.message}`,
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   useEffect(() => {
     fetchTemplates();
@@ -217,7 +288,15 @@ export const TemplateManagement = () => {
             Uploadez vos templates de CV (PDF pour analyse IA, .doc/.docx/.ppt/.pptx avec structure par défaut)
           </p>
         </div>
-
+        <Badge variant="secondary">{templates.length} template{templates.length > 1 ? 's' : ''}</Badge>
+        <Button
+          onClick={handleDeleteAllTemplatesAndClearCache}
+          variant="destructive"
+          disabled={isLoading}
+        >
+          {isLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
+          Supprimer les templates et vider le cache
+        </Button>
         <label htmlFor="template-input">
           <Button variant="hero" size="lg" disabled={isUploading} asChild>
             <span>
