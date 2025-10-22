@@ -10,8 +10,8 @@ import Dashboard from "./pages/Dashboard";
 import NotFound from "./pages/NotFound";
 import AuthComponent from "./components/Auth";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import CVHistoryList from './components/dashboard/CVHistoryList';
-import TemplateManagement from './components/dashboard/TemplateManagement';
+import { CVHistoryList } from './components/dashboard/CVHistoryList';
+import { TemplateManagement } from './components/dashboard/TemplateManagement';
 
 const queryClient = new QueryClient();
 
