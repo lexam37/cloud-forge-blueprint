@@ -8,12 +8,6 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-const sectionKeywords = {
-  'Compétences': ['compétence', 'competence', 'skills', 'compétences', 'savoir-faire'],
-  'Expérience': ['expérience', 'experience', 'expériences', 'work history', 'professional experience'],
-  'Formations & Certifications': ['formation', 'formations', 'certification', 'certifications', 'diplôme', 'diplome', 'education', 'études', 'etudes', 'study', 'studies']
-};
-
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
@@ -42,6 +36,7 @@ serve(async (req) => {
     const templateStructure = cvDoc.cv_templates?.structure_data || {};
     const sectionNames = templateStructure.sections?.map((s: any) => s.name) || ['Compétences', 'Expérience', 'Formations & Certifications'];
     const skillSubcategories = templateStructure.element_styles?.skill_subcategories?.map((sc: any) => sc.name) || ['Langage/BDD', 'OS', 'Outils', 'Méthodologies'];
+    const hasCommercialContact = templateStructure.element_styles?.commercial_contact?.position === 'header';
 
     await supabase.from('processing_logs').insert({
       cv_document_id: cvDocumentId,
@@ -65,46 +60,13 @@ serve(async (req) => {
     try {
       const arrayBuffer = await cvFileData.arrayBuffer();
       if (fileType === 'docx' || fileType === 'doc') {
-        const { value: html } = await convert({ arrayBuffer, includeEmbeddedStyleMap: true });
+        const { value: html } = await convert({ arrayBuffer });
         console.log('Extracted HTML from CV:', html.substring(0, 500));
 
         const parser = new DOMParser();
         const doc = parser.parseFromString(html, 'text/html');
-
-        // Analyse de l'en-tête
-        const headerElements = doc.querySelectorAll('header p');
-        headerElements.forEach((p: any) => {
-          const text = p.textContent.trim().replace(/^[•\-\*É°\u2022\u25CF]\s*/g, '');
-          if (!text) return;
-
-          const styleAttr = p.getAttribute('style') || '';
-          const style = {
-            font: styleAttr.match(/font-family:([^;]+)/)?.[1]?.trim() || 'Segoe UI Symbol',
-            size: styleAttr.match(/font-size:([^;]+)/)?.[1]?.trim() || '11pt',
-            color: styleAttr.match(/color:(#[0-9a-fA-F]{6})/)?.[1] || '#000000',
-            bold: styleAttr.includes('font-weight:bold'),
-            italic: styleAttr.includes('font-style:italic'),
-            underline: styleAttr.includes('text-decoration:underline') ? { type: 'single', color: styleAttr.match(/text-decoration-color:(#[0-9a-fA-F]{6})/)?.[1] || '#000000' } : null,
-            bullet: p.querySelector('li') || text.match(/^[•\-\*É°\u2022\u25CF]/) ? true : false,
-            indent: styleAttr.match(/padding-left:([^;]+)/)?.[1]?.trim() || text.match(/\t/) ? '5mm' : '0pt',
-            alignment: styleAttr.includes('text-align:center') ? 'center' : styleAttr.includes('text-align:right') ? 'right' : 'left',
-            spacingBefore: styleAttr.match(/margin-top:([^;]+)/)?.[1]?.trim() || '0pt',
-            spacingAfter: styleAttr.match(/margin-bottom:([^;]+)/)?.[1]?.trim() || '6pt',
-            lineHeight: styleAttr.match(/line-height:([^;]+)/)?.[1]?.trim() || '1.15'
-          };
-
-          if (text.match(/^[A-Z]{3}$/)) {
-            structuredData.push({ text, style, section: 'header', subcategory: 'trigram' });
-          } else if (text.match(/architecte|ingénieur|consultant|expert|owner/i)) {
-            structuredData.push({ text, style, section: 'header', subcategory: 'title' });
-          } else if (text.match(/contact\s*(commercial|professionnel)/i)) {
-            structuredData.push({ text, style, section: 'header', subcategory: 'commercial_contact' });
-          }
-        });
-
-        // Analyse du corps
-        const paragraphs = doc.querySelectorAll('body p');
-        console.log('Body paragraphs found:', paragraphs.length);
+        const paragraphs = doc.querySelectorAll('p');
+        console.log('Paragraphs found:', paragraphs.length);
 
         let currentSubcategory = '';
         let skillItems: string[] = [];
@@ -116,19 +78,23 @@ serve(async (req) => {
           if (!text) return;
 
           const styleAttr = p.getAttribute('style') || '';
+          const underlineMatch = styleAttr.match(/text-decoration: underline/);
+          const underlineColorMatch = styleAttr.match(/text-decoration-color: (#\w+)/);
+          const tabMatch = text.match(/\t/);
           const style = {
             font: styleAttr.match(/font-family:([^;]+)/)?.[1]?.trim() || 'Segoe UI Symbol',
             size: styleAttr.match(/font-size:([^;]+)/)?.[1]?.trim() || '11pt',
             color: styleAttr.match(/color:(#[0-9a-fA-F]{6})/)?.[1] || '#000000',
             bold: styleAttr.includes('font-weight:bold'),
             italic: styleAttr.includes('font-style:italic'),
-            underline: styleAttr.includes('text-decoration:underline') ? { type: 'single', color: styleAttr.match(/text-decoration-color:(#[0-9a-fA-F]{6})/)?.[1] || '#000000' } : null,
+            underline: underlineMatch ? { type: 'single', color: underlineColorMatch ? underlineColorMatch[1] : '#000000' } : null,
+            case: text.match(/^[A-Z][a-z]+/) ? 'mixed' : text === text.toUpperCase() ? 'uppercase' : 'lowercase',
             bullet: p.querySelector('li') || text.match(/^[•\-\*É°\u2022\u25CF]/) ? true : false,
-            indent: styleAttr.match(/padding-left:([^;]+)/)?.[1]?.trim() || text.match(/\t/) ? '5mm' : '0pt',
             alignment: styleAttr.includes('text-align:center') ? 'center' : styleAttr.includes('text-align:right') ? 'right' : 'left',
             spacingBefore: styleAttr.match(/margin-top:([^;]+)/)?.[1]?.trim() || '0pt',
             spacingAfter: styleAttr.match(/margin-bottom:([^;]+)/)?.[1]?.trim() || '6pt',
-            lineHeight: styleAttr.match(/line-height:([^;]+)/)?.[1]?.trim() || '1.15'
+            lineHeight: styleAttr.match(/line-height:([^;]+)/)?.[1]?.trim() || '1.15',
+            indent: styleAttr.match(/padding-left:([^;]+)/)?.[1]?.trim() || tabMatch ? '5mm' : '0pt'
           };
 
           const textLower = text.toLowerCase();
@@ -176,9 +142,9 @@ serve(async (req) => {
               structuredData.push({ text, style, section: currentSection });
             }
           } else if (currentSection === 'Expérience' && !isSection) {
-            if (text.match(/^\d{2}\/\d{4}\s*-\s*\d{2}\/\d{4}|^[A-Z][a-z]+\s*@/i)) {
+            if (text.match(/^\d{2}\/\d{4}\s*-\s*\d{2}\/\d{4}\s*.*@.*/)) {
               if (currentMission) structuredData.push(currentMission);
-              currentMission = { text, style: { ...style, color: '#142D5A', font: 'Segoe UI Symbol', size: '11pt', spacingAfter: '6pt', lineHeight: '1.15', indent: '0mm' }, section: 'Expérience', subcategory: 'title' };
+              currentMission = { text, style, section: 'Expérience', subcategory: 'title' };
             } else if (textLower.includes('contexte') || textLower.includes('objectif')) {
               if (currentMission) currentMission.context = { text, style };
             } else if (textLower.includes('mission') || textLower.includes('tâche')) {
@@ -190,6 +156,7 @@ serve(async (req) => {
               if (currentMission) currentMission.environment = { text, style };
             } else if (text.match(/lieu|ville|city/i)) {
               if (currentMission) currentMission.location = { text, style };
+              }
             } else {
               structuredData.push({ text, style, section: currentSection });
             }
@@ -222,7 +189,7 @@ serve(async (req) => {
         extractedText = data.text.replace(/^[•\-\*É°\u2022\u25CF]\s*/gm, '').replace(/\s+/g, ' ').trim();
         structuredData = extractedText.split('\n').map(line => ({
           text: line.trim(),
-          style: { font: 'Unknown', size: 'Unknown', color: '#000000', bold: false, italic: false, bullet: false, indent: '0pt', alignment: 'left', spacingBefore: '0pt', spacingAfter: '0pt', lineHeight: '1.15' },
+          style: { font: 'Unknown', size: 'Unknown', color: '#000000', bold: false, italic: false, underline: null, bullet: false, indent: '0pt', alignment: 'left', spacingBefore: '0pt', spacingAfter: '0pt', lineHeight: '1.15' },
           section: 'unknown'
         }));
       } else {
@@ -247,12 +214,12 @@ serve(async (req) => {
    - Compétences : inclut 'compétence', 'skills', 'savoir-faire'.
    - Expérience : inclut 'expérience', 'work history', 'professional experience'.
    - Formations & Certifications : inclut 'formation', 'certification', 'diplôme', 'education', 'études', 'studies'.
-4. Pour les COMPÉTENCES, regrouper les items par sous-catégories (${skillSubcategories.join(', ')}) dans UNE SEULE CHAÎNE séparée par des virgules (ex. : "Langage/BDD: Spark, Hive"). Ne pas ajouter "Techniques" sauf si explicite.
+4. Pour les COMPÉTENCES, regrouper les items par sous-catégories (${skillSubcategories.join(', ')}) dans UNE SEULE CHAÎNE séparée par des virgules (ex. : "Langage/BDD: Spark, Hive"). Ne pas ajouter "Techniques" sauf si explicite dans le CV.
 5. Pour les EXPÉRIENCES, extraire les sous-parties :
    - Titre : format "MM/YYYY - MM/YYYY Rôle @ Entreprise" (ex. : "02/2012 - 05/2021 Expert Fonctionnel / Product Owner @ Atos : Orange, SIRS").
-   - Dates : extraire date_start (MM/YYYY), date_end (MM/YYYY ou 'Actuellement').
+   - Dates : date_start (MM/YYYY), date_end (MM/YYYY ou 'Actuellement').
    - Entreprise : nom(s) après "@".
-   - Lieu : si mentionné (ex. : "Paris").
+   - Lieu : si mentionné.
    - Contexte/Objectif : texte sous "Contexte" ou "Objectif".
    - Missions/Tâches : liste des tâches (puces ou texte).
    - Environnement/Technologies : technologies mentionnées.
@@ -260,7 +227,7 @@ serve(async (req) => {
    - Diplôme/Certification : nom (ex. : "Certification Scrum Product Owner I").
    - Date : année ou MM/YYYY.
    - Institution/Organisme : nom (ex. : "Aix-Marseille III").
-   - Lieu : si mentionné (ex. : "Paris").
+   - Lieu : si mentionné.
 7. Identifier dans l’EN-TÊTE : trigramme (ex. : "CVA"), titre professionnel (ex. : "Analyste Fonctionnel / Product Owner"), coordonnées commerciales (ex. : "Contact Commercial").
 8. Identifier dans le PIED DE PAGE : tout texte ou élément (ex. : numéro de page, logo).
 9. Conserver la casse exacte des titres de section ("Compétences", "Expérience", "Formations & Certifications").
@@ -319,7 +286,7 @@ Retourne un JSON avec cette structure :
     }
   ]
 }`;
-
+ 
     const aiResponse = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -356,6 +323,10 @@ Retourne un JSON avec cette structure :
       throw new Error('Failed to parse AI extraction result');
     }
 
+    extractedData.commercial_contact = {
+      text: hasCommercialContact ? 'Contact Commercial' : '',
+      enabled: hasCommercialContact
+    };
     console.log('ExtractedData:', JSON.stringify(extractedData, null, 2));
 
     await supabase.from('processing_logs').insert({
