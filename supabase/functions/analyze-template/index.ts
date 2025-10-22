@@ -6,6 +6,9 @@ import { parseStringPromise } from "npm:xml2js@0.6.2";
 import OpenAI from "npm:openai@4.0.0";
 
 const openai = new OpenAI({ apiKey: Deno.env.get("OPENAI_API_KEY") });
+const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+const supabase = createClient(supabaseUrl, supabaseKey);
 
 serve(async (req: Request) => {
   try {
