@@ -1,5 +1,6 @@
 // supabase/functions/generate-cv-word/index.ts
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.75.0";
 import { Packer, Document, Paragraph, TextRun, AlignmentType, UnderlineType, ShadingType, BorderStyle, PageOrientation, Header, Footer, ImageRun, Table, TableRow, TableCell, WidthType } from "npm:docx@8.5.0";
 
 serve(async (req: Request) => {
