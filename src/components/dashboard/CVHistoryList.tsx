@@ -22,6 +22,55 @@ export const CVHistoryList = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const { toast } = useToast();
+  const handleDeleteAllCVsAndClearCache = async () => {
+  if (!confirm("Êtes-vous sûr de vouloir supprimer tous les CV et vider le cache ? Cette action est irréversible.")) {
+    return;
+  }
+
+  setIsLoading(true);
+  try {
+    // Supprimer tous les fichiers des buckets 'cv-uploads' et 'cv-generated'
+    const buckets = ['cv-uploads', 'cv-generated'];
+    for (const bucket of buckets) {
+      const { data: files, error: listError } = await supabase.storage.from(bucket).list();
+      if (listError) throw listError;
+      if (files && files.length > 0) {
+        const paths = files.map(file => file.name);
+        const { error: deleteError } = await supabase.storage.from(bucket).remove(paths);
+        if (deleteError) throw deleteError;
+      }
+    }
+
+    // Supprimer tous les enregistrements de la table 'cv_documents'
+    const { error: dbError } = await supabase.from('cv_documents').delete().neq('id', ''); // Supprime tout
+    if (dbError) throw dbError;
+
+    // Vider le cache du navigateur
+    if ('caches' in window) {
+      const cacheNames = await caches.keys();
+      await Promise.all(cacheNames.map(name => caches.delete(name)));
+    }
+    localStorage.clear();
+
+    // Rafraîchir la liste
+    setCvDocuments([]);
+    toast({
+      title: "Succès",
+      description: "Tous les CV ont été supprimés et le cache vidé.",
+    });
+    // Optionnel : recharger la page
+    window.location.reload();
+  } catch (error) {
+    console.error('Erreur lors de la suppression:', error);
+    toast({
+      variant: "destructive",
+      title: "Erreur",
+      description: "Impossible de supprimer les CV ou vider le cache.",
+    });
+  } finally {
+    setIsLoading(false);
+  }
+  };
 
   useEffect(() => {
     fetchCVDocuments();
@@ -288,6 +337,14 @@ export const CVHistoryList = () => {
       <div className="flex items-center justify-between mb-6">
         <h2 className="text-2xl font-bold">Historique des CV</h2>
         <Badge variant="secondary">{cvDocuments.length} document{cvDocuments.length > 1 ? 's' : ''}</Badge>
+        <Button
+          onClick={handleDeleteAllCVsAndClearCache}
+          variant="destructive"
+          disabled={isLoading}
+        >
+          {isLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
+          Supprimer les CV et vider le cache
+        </Button>
       </div>
 
       <div className="grid gap-4">
