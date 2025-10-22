@@ -1,5 +1,6 @@
 // supabase/functions/analyze-template/index.ts
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.75.0";
 import JSZip from "npm:jszip@3.10.1";
 import { parseStringPromise } from "npm:xml2js@0.6.2";
 import OpenAI from "npm:openai@4.0.0";
