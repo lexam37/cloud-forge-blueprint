@@ -13,39 +13,18 @@ serve(async (req: Request) => {
     // Extract text from CV
     const { value: cvText } = await mammoth.extractRawText({ arrayBuffer: buffer });
 
-    // AI prompt for extraction
+    // AI extraction (similar, but perhaps enhance with style awareness if CV has styles)
     const prompt = `
-Analyse la structure de ce CV et extrais les données clés en JSON structuré :
+Extrais les données clés du CV en JSON:
 {
-  "title": "Titre du CV/Métier",
-  "name": "Nom complet pour générer trigramme (anonymise après)",
-  "competencies": {
-    "technical": ["liste"],
-    "functional": ["liste"]
-  },
-  "experiences": [
-    {
-      "title": "Titre mission (rôle, entreprise)",
-      "dates": "Dates (format détecté, e.g., MM/YYYY - MM/YYYY)",
-      "dateFormat": "Format des dates (e.g., MM/YYYY)",
-      "context": "Contexte/objectif (si présent)",
-      "missions": ["liste des missions/réalisations"],
-      "env": "Environnement technique/fonctionnel"
-    }
-  ],
-  "formations": [
-    {
-      "title": "Diplôme/certification",
-      "dates": "Dates",
-      "dateFormat": "Format",
-      "place": "Lieu et organisme (si présent)"
-    }
-  ]
+  "title": "...",
+  "name": "... (pour trigramme)",
+  "competencies": { "technical": [], "functional": [] },
+  "experiences": [{ "title": "", "dates": "", "company": "", "context": "", "missions": [], "env": "" }],
+  "formations": [{ "title": "", "dates": "", "place": "" }]
 }
-Anonymise : retire nom, adresse, tel, email, etc. après génération du trigramme.
-Génère trigramme : première lettre prénom + deux premières lettres nom, en majuscules.
-Détecte incohérences et formats dates. Ajoute sauts de ligne implicites.
-CV texte : ${cvText}
+Anonymise après trigramme. Détecte formats dates.
+CV: ${cvText}
 `;
 
     const response = await openai.chat.completions.create({
@@ -54,16 +33,15 @@ CV texte : ${cvText}
     });
     let extracted = JSON.parse(response.choices[0].message.content);
 
-    // Generate trigram from name
+    // Generate trigram
     if (extracted.name) {
-      const [firstName, lastName] = extracted.name.split(' ');
-      extracted.trigram = (firstName[0] + (lastName?.[0] || '') + (lastName?.[1] || '')).toUpperCase();
-      delete extracted.name; // Anonymize
+      const [first, last] = extracted.name.split(' ');
+      extracted.trigram = (first?.[0] || '') + (last?.[0] || '') + (last?.[1] || '').toUpperCase();
+      delete extracted.name;
     } else {
-      extracted.trigram = 'XXX'; // Default
+      extracted.trigram = 'XXX';
     }
 
-    // Add commercial coords
     extracted.commercial = commercialCoords;
 
     return new Response(JSON.stringify(extracted), { status: 200 });
