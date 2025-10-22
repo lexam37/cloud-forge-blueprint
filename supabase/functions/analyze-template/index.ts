@@ -2,6 +2,9 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import JSZip from "npm:jszip@3.10.1";
 import { parseStringPromise } from "npm:xml2js@0.6.2";
+import OpenAI from "npm:openai@4.0.0";
+
+const openai = new OpenAI({ apiKey: Deno.env.get("OPENAI_API_KEY") });
 
 serve(async (req: Request) => {
   try {
@@ -26,33 +29,30 @@ serve(async (req: Request) => {
     const styles = await parseStringPromise(stylesXml);
     const rels = relsXml ? await parseStringPromise(relsXml) : null;
 
-    // Extract general page layout from w:sectPr
+    // Extract general page layout (same as before)
     const body = document["w:document"]["w:body"][0];
     let sectPr = body["w:sectPr"]?.[0];
-    if (!sectPr) {
-      // Check last paragraph for sectPr
-      const lastPara = body["w:p"]?.[body["w:p"].length - 1];
-      if (lastPara && lastPara["w:pPr"]) {
-        sectPr = lastPara["w:pPr"][0]["w:sectPr"]?.[0];
-      }
+    if (!sectPr && body["w:p"]) {
+      const lastPara = body["w:p"][body["w:p"].length - 1];
+      sectPr = lastPara["w:pPr"]?.[0]?.["w:sectPr"]?.[0];
     }
     const pageLayout = {
       margins: sectPr?.["w:pgMar"]?.[0]?.$ || { top: "1440", bottom: "1440", left: "1440", right: "1440" },
       orientation: sectPr?.["w:pgSz"]?.[0]?.$?.orient || "portrait",
-      size: sectPr?.["w:pgSz"]?.[0]?.$ || { w: "12240", h: "15840" }, // A4 default in twips
+      size: sectPr?.["w:pgSz"]?.[0]?.$ || { w: "12240", h: "15840" },
       columns: sectPr?.["w:cols"]?.[0]?.$?.num || 1,
       spacing: sectPr?.["w:spacing"]?.[0]?.$?.line || "240",
     };
 
-    // Parse headers and footers
+    // Parse headers and footers (similar)
     const headers = {};
     const footers = {};
     for (const file of headerFiles) {
       const headerXml = await zip.file(file)?.async("string");
       if (headerXml) {
         const header = await parseStringPromise(headerXml);
-        const type = file.includes("header1") ? "first" : "default"; // Simplify; check rels for exact
-        headers[type] = extractElements(header["w:hdr"], zip, rels); // Custom extract
+        const type = file.includes("header1") ? "first" : "default";
+        headers[type] = extractElements(header["w:hdr"], zip, rels);
       }
     }
     for (const file of footerFiles) {
@@ -65,264 +65,108 @@ serve(async (req: Request) => {
     }
     const firstPageDifferent = !!headers["first"] || !!footers["first"];
 
-    // Extract elements from body
-    const bodyElements = extractElements(body, zip, rels);
+    // New approach: Extract all styles and group by similarities
+    const allElements = { body: extractElements(body, zip, rels), headers, footers };
+    const styleProfiles = collectStyleProfiles(allElements, styles);
 
-    // Resolve styles by type, detecting inconsistencies
-    const elementStyles = {
-      title: [],
-      commercialCoords: [],
-      logo: [],
-      trigram: [],
-      competencies: [],
-      experiences: { title: [], date: [], company: [], context: [], missions: [], env: [] },
-      formations: { title: [], date: [], place: [] },
-      // Add more subcategories
-    };
+    // Count uniques
+    const uniqueFonts = [...new Set(styleProfiles.map(s => s.font))];
+    const uniqueSizes = [...new Set(styleProfiles.map(s => s.size))];
+    const uniqueColors = [...new Set(styleProfiles.map(s => s.color))];
+    const uniqueStyles = groupByStyleKey(styleProfiles); // Group into clusters
 
-    // Combine body, headers, footers for analysis
-    const allElements = { ...bodyElements, headers, footers };
+    // Use AI to label clusters based on text examples and differences
+    const clusterLabels = await labelClustersWithAI(uniqueStyles);
 
-    // Categorize and collect styles using regex
-    Object.keys(allElements).forEach(section => {
-      allElements[section].paragraphs.forEach(para => {
-        const text = para.text;
-        const style = extractStyle(para.pPr, para.rPrs, styles, text);
-        style.position = section; // header, footer, body
+    // Resolve to resolvedStyles: { title: style, experiences.title: style, etc. }
+    const resolvedStyles = mapLabelsToElements(clusterLabels);
 
-        if (/^(CV|Titre|Métier)/i.test(text)) {
-          elementStyles.title.push(style);
-        } else if (/Coordonnées du commercial/i.test(text)) {
-          elementStyles.commercialCoords.push(style);
-        } else if (/Trigramme/i.test(text)) {
-          elementStyles.trigram.push(style);
-        } else if (/(Compétences|Skills)/i.test(text)) {
-          elementStyles.competencies.push(style);
-        } else if (/(Expériences|Professional Experience)/i.test(text)) {
-          elementStyles.experiences.title.push(style);
-        } else if (/\d{2}\/\d{2}\/\d{4}/.test(text)) { // Date example
-          elementStyles.experiences.date.push(style);
-        } // Add more regex for subparts
-        // Similar for other categories
-      });
+    // Extract logo if present
+    const images = allElements.body.images.concat(Object.values(headers).flatMap(h => h?.images || []), Object.values(footers).flatMap(f => f?.images || []));
+    const logo = images.find(img => img.description?.toLowerCase().includes("logo")) || null;
+    const logoBuffer = logo ? await zip.file(logo.filePath)?.async("uint8array") : null;
 
-      // Tables, images, etc.
-      allElements[section].images.forEach(img => {
-        if (img.description?.includes("logo")) {
-          elementStyles.logo.push({ ...img, position: section });
-        }
-      });
-    });
-
-    // Resolve inconsistencies: most common style per type
-    const resolvedStyles = {};
-    for (const type in elementStyles) {
-      if (typeof elementStyles[type] === 'object') {
-        const subResolved = {};
-        for (const sub in elementStyles[type]) {
-          subResolved[sub] = getMostCommonStyle(elementStyles[type][sub]);
-        }
-        resolvedStyles[type] = subResolved;
-      } else {
-        resolvedStyles[type] = getMostCommonStyle(elementStyles[type]);
-      }
-    }
-
-    // Detect date formats
-    const dateFormats = { mission: detectDateFormat(elementStyles.experiences.date.map(s => s.exampleText || '')) };
-
-    // Extract images for logo if any
-    const logoBuffer = elementStyles.logo.length ? await zip.file(elementStyles.logo[0].filePath)?.async("uint8array") : null;
-
-    return new Response(JSON.stringify({ pageLayout, headers, footers, resolvedStyles, firstPageDifferent, dateFormats, logoBuffer: logoBuffer ? btoa(String.fromCharCode(...logoBuffer)) : null }), { status: 200 });
+    return new Response(JSON.stringify({
+      pageLayout,
+      headers,
+      footers,
+      resolvedStyles,
+      firstPageDifferent,
+      uniqueCounts: { fonts: uniqueFonts.length, sizes: uniqueSizes.length, colors: uniqueColors.length },
+      logoBuffer: logoBuffer ? btoa(String.fromCharCode(...logoBuffer)) : null,
+    }), { status: 200 });
   } catch (error) {
     return new Response(error.message, { status: 500 });
   }
 });
 
-// Helper to extract elements from section (body/header/footer)
-async function extractElements(section, zip, rels) {
-  const paragraphs = extractParagraphs(section);
-  const tables = extractTables(section);
-  const images = await extractImages(section, rels, zip);
-  // Add shapes/icons if w:drawing with v:shape
-  return { paragraphs, tables, images };
-}
+// Helper functions (extractElements, extractParagraphs, etc. similar to previous)
 
-// From tool responses: extractParagraphs, extractRunsFromParagraph, etc.
-function extractParagraphs(body) {
-  const paragraphs = [];
-  if (body["w:p"]) {
-    const ps = Array.isArray(body["w:p"]) ? body["w:p"] : [body["w:p"]];
-    ps.forEach(p => {
-      const pPr = p["w:pPr"]?.[0] || {};
-      const rPrs = extractRunsFromParagraph(p).map(run => run.properties);
-      const text = extractTextFromRuns(p);
-      paragraphs.push({ pPr, rPrs, text });
-    });
-  }
-  return paragraphs;
-}
-
-function extractTextFromRuns(p) {
-  let text = '';
-  if (p['w:r']) {
-    const rs = Array.isArray(p['w:r']) ? p['w:r'] : [p['w:r']];
-    rs.forEach(r => {
-      if (r['w:t']) text += (Array.isArray(r['w:t']) ? r['w:t'].join('') : r['w:t']) + ' ';
-    });
-  }
-  return text.trim();
-}
-
-function extractRunsFromParagraph(p) {
-  const runs = [];
-  if (p['w:r']) {
-    const rs = Array.isArray(p['w:r']) ? p['w:r'] : [p['w:r']];
-    rs.forEach(r => {
-      const props = {};
-      if (r['w:rPr']) {
-        const rPr = r['w:rPr'][0];
-        if (rPr['w:b']) props.bold = true;
-        if (rPr['w:i']) props.italic = true;
-        if (rPr['w:sz']) props.size = parseInt(rPr['w:sz'][0]?.$?.val || '0') / 2;
-        if (rPr['w:color']) props.color = rPr['w:color'][0]?.$?.val;
-        if (rPr['w:u']) props.underline = rPr['w:u'][0]?.$?.val;
-        if (rPr['w:u'] && rPr['w:u'][0]?.$?.color) props.underlineColor = rPr['w:u'][0]?.$?.color;
-        if (rPr['w:rFonts']) props.font = rPr['w:rFonts'][0]?.$?.ascii;
-        // Effects like w:effect, w:strike, etc.
-      }
-      const text = r['w:t'] ? (Array.isArray(r['w:t']) ? r['w:t'].join('') : r['w:t']) : '';
-      runs.push({ properties: props, text });
-    });
-  }
-  return runs;
-}
-
-async function extractImages(doc, rels, zip) {
-  const images = [];
-  const relMap = new Map();
-  if (rels && rels['Relationships'] && rels['Relationships']['Relationship']) {
-    const relationships = Array.isArray(rels['Relationships']['Relationship']) ? rels['Relationships']['Relationship'] : [rels['Relationships']['Relationship']];
-    relationships.forEach(r => {
-      if (r.$?.Type.includes('image')) {
-        relMap.set(r.$?.Id, r.$?.Target);
-      }
-    });
-  }
-
-  // Traverse for w:drawing
-  // Simplified: assume in body["w:p"] or section
-  (section["w:p"] || []).forEach(p => {
-    if (p['w:r'] && p['w:r'].some(r => r['w:drawing'])) {
-      const drawing = p['w:r'].find(r => r['w:drawing'])['w:drawing'][0];
-      const blip = drawing['wp:inline']?.[0]?.['a:graphic']?.[0]?.['a:graphicData']?.[0]?.['pic:pic']?.[0]?.['pic:blipFill']?.[0]?.['a:blip']?.[0];
-      const relId = blip?.$?.['r:embed'];
-      const target = relMap.get(relId);
-      if (target) {
-        const filePath = target.startsWith('../media') ? 'word/media' + target.slice(2) : target;
-        const buffer = await zip.file(filePath)?.async("uint8array");
-        images.push({ filePath, buffer, description: drawing['wp:docPr']?.[0]?.$?.descr || '' });
-      }
+// Collect all styles with text and position
+function collectStyleProfiles(allElements, globalStyles) {
+  const profiles = [];
+  Object.entries(allElements).forEach(([section, elements]) => {
+    if (elements && elements.paragraphs) {
+      elements.paragraphs.forEach(para => {
+        const style = extractStyle(para.pPr, para.rPrs, globalStyles, para.text);
+        style.position = section;
+        style.textExample = para.text.slice(0, 100); // For AI labeling
+        profiles.push(style);
+      });
     }
+    // Add for tables, images if needed
   });
-  return images;
+  return profiles;
 }
 
-function extractTables(body) {
-  // Similar to tool response
-  const tables = [];
-  if (body['w:tbl']) {
-    const tbls = Array.isArray(body['w:tbl']) ? body['w:tbl'] : [body['w:tbl']];
-    tbls.forEach(tbl => {
-      const table = { rows: [] };
-      if (tbl['w:tr']) {
-        const trs = Array.isArray(tbl['w:tr']) ? tbl['w:tr'] : [tbl['w:tr']];
-        trs.forEach(tr => {
-          const row = [];
-          if (tr['w:tc']) {
-            const tcs = Array.isArray(tr['w:tc']) ? tr['w:tc'] : [tr['w:tc']];
-            tcs.forEach(tc => {
-              const text = extractTextFromRuns(tc);
-              row.push({ text, pPr: tc['w:p']?.[0]?.['w:pPr']?.[0] });
-            });
-          }
-          table.rows.push(row);
-        });
-      }
-      tables.push(table);
-    });
-  }
-  return tables;
-}
-
-function extractStyle(pPr, rPrs, globalStyles, text) {
-  const style = {
-    font: rPrs[0]?.font || "Arial",
-    size: rPrs[0]?.size || 12,
-    bold: !!rPrs[0]?.bold,
-    italic: !!rPrs[0]?.italic,
-    underline: rPrs[0]?.underline || null,
-    underlineColor: rPrs[0]?.underlineColor || null,
-    color: rPrs[0]?.color || "000000",
-    effects: rPrs[0]?.effect || null, // e.g., shadow, outline
-    alignment: pPr["w:jc"]?.[0]?.$?.val || "left",
-    indent: pPr["w:ind"]?.[0]?.$?.left || 0,
-    spacing: pPr["w:spacing"]?.[0]?.$?.after || 0,
-    background: pPr["w:shd"]?.[0]?.$?.fill || null,
-    borders: pPr["w:pBdr"] ? extractBorders(pPr["w:pBdr"][0]) : null,
-    bullets: pPr["w:numPr"] ? true : false,
-    case: detectCase(text),
-    exampleText: text, // For date formats
-    // Table if inside tbl, icon if drawing without blip
-  };
-  // Link to global style if pPr["w:pStyle"]
-  if (pPr["w:pStyle"]) {
-    const styleId = pPr["w:pStyle"][0]?.$?.val;
-    const globalStyle = globalStyles["w:styles"]["w:style"].find(s => s.$?.["w:type"] === "paragraph" && s.$?.["w:styleId"] === styleId);
-    if (globalStyle) {
-      // Merge from global
-      const globalRPr = globalStyle["w:rPr"]?.[0];
-      if (globalRPr) {
-        style.font = globalRPr["w:rFonts"]?.[0]?.$?.ascii || style.font;
-        // etc.
-      }
-    }
-  }
-  return style;
-}
-
-function extractBorders(pBdr) {
-  return {
-    top: pBdr["w:top"]?.[0]?.$ || null,
-    bottom: pBdr["w:bottom"]?.[0]?.$ || null,
-    left: pBdr["w:left"]?.[0]?.$ || null,
-    right: pBdr["w:right"]?.[0]?.$ || null,
-  };
-}
-
-function detectCase(text) {
-  if (!text) return 'mixed';
-  if (text === text.toUpperCase()) return 'upper';
-  if (text === text.toLowerCase()) return 'lower';
-  if (text === text[0].toUpperCase() + text.slice(1).toLowerCase()) return 'title';
-  return 'mixed';
-}
-
-function getMostCommonStyle(styles) {
-  if (!styles.length) return {};
-  const counts = new Map();
-  styles.forEach(s => {
-    const key = JSON.stringify(s);
-    counts.set(key, (counts.get(key) || 0) + 1);
+// Group by hash of style (similarity)
+function groupByStyleKey(profiles) {
+  const groups = new Map();
+  profiles.forEach(p => {
+    const key = createStyleHash(p); // e.g., JSON.stringify({font, size, bold, italic, color, underline, alignment, etc.})
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(p);
   });
-  const maxKey = Array.from(counts.entries()).reduce((a, b) => b[1] > a[1] ? b : a)[0];
-  return JSON.parse(maxKey);
+  return groups;
 }
 
-function detectDateFormat(dateStrings) {
-  const patterns = dateStrings.map(d => d.match(/\d+([\/-])\d+([\/-])\d+/)?[0] : null).filter(Boolean);
-  if (!patterns.length) return 'DD/MM/YYYY';
-  const countMap = patterns.reduce((acc, p) => { acc[p] = (acc[p] || 0) + 1; return acc; }, {});
-  return Object.keys(countMap).reduce((a, b) => countMap[a] > countMap[b] ? a : b);
+function createStyleHash(style) {
+  const { font, size, bold, italic, underline, underlineColor, color, effects, alignment, indent, spacing, background, borders, bullets, case: textCase } = style;
+  return JSON.stringify({ font, size, bold, italic, underline, underlineColor, color, effects, alignment, indent, spacing, background, borders, bullets, textCase });
+}
+
+// AI labeling
+async function labelClustersWithAI(groups) {
+  const clusterDescs = Array.from(groups.entries()).map(([key, ps]) => ({
+    style: JSON.parse(key),
+    examples: ps.map(p => ({ text: p.textExample, position: p.position })),
+    count: ps.length,
+  }));
+
+  const prompt = `Analyse ces clusters de styles dans un template de CV. Pour chaque cluster, identifie à quel élément il correspond (ex: titre CV, titre mission, date, compétences, etc.) basé sur différences/similitudes et exemples de texte. Détecte incohérences et choisis le plus commun si besoin. Output JSON: { cluster1: "label", ... } où cluster1 est l'index.`;
+  const response = await openai.chat.completions.create({
+    model: "gpt-4",
+    messages: [{ role: "user", content: `${prompt}\n\nClusters: ${JSON.stringify(clusterDescs)}` }],
+  });
+  return JSON.parse(response.choices[0].message.content);
+}
+
+// Map labels to standard elements
+function mapLabelsToElements(clusterLabels) {
+  const resolved = {};
+  // e.g., if label === "titre des missions", map to experiences.title
+  // Implement mapping logic based on common labels
+  Object.entries(clusterLabels).forEach(([clusterId, label]) => {
+    const key = normalizeLabelToKey(label); // Custom function, e.g., "Titre mission" -> "experiences.title"
+    resolved[key] = clusterDescs[parseInt(clusterId)].style; // Assume clusterDescs array
+  });
+  return resolved;
+}
+
+// Add normalizeLabelToKey function
+function normalizeLabelToKey(label) {
+  // Logic to map AI labels to your spec keys
+  if (/titre.*mission/i.test(label)) return "experiences.title";
+  // etc.
+  return label.toLowerCase().replace(/\s/g, "");
 }
