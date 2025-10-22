@@ -1,217 +1,328 @@
+// supabase/functions/analyze-template/index.ts
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { convert } from "https://esm.sh/mammoth@1.6.0";
+import JSZip from "npm:jszip@3.10.1";
+import { parseStringPromise } from "npm:xml2js@0.6.2";
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-};
+serve(async (req: Request) => {
+  try {
+    const { templateBase64 } = await req.json();
+    const buffer = Uint8Array.from(atob(templateBase64), c => c.charCodeAt(0));
 
-const sectionKeywords = {
-  'Compétences': ['compétence', 'competence', 'skills', 'compétences', 'savoir-faire'],
-  'Expérience': ['expérience', 'experience', 'expériences', 'work history', 'professional experience'],
-  'Formations & Certifications': ['formation', 'formations', 'certification', 'certifications', 'diplôme', 'diplome', 'education', 'études', 'etudes', 'study', 'studies']
-};
+    // Unzip DOCX
+    const zip = await JSZip.loadAsync(buffer);
 
-async function analyzeDocxTemplate(arrayBuffer: ArrayBuffer, templateId: string, supabase: any) {
-  const { value: html } = await convert({ arrayBuffer });
-  console.log('Extracted HTML from template:', html.substring(0, 500));
+    // Extract XML files
+    const documentXml = await zip.file("word/document.xml")?.async("string");
+    const stylesXml = await zip.file("word/styles.xml")?.async("string");
+    const relsXml = await zip.file("word/_rels/document.xml.rels")?.async("string");
+    const headerFiles = Object.keys(zip.files).filter(f => f.startsWith("word/header"));
+    const footerFiles = Object.keys(zip.files).filter(f => f.startsWith("word/footer"));
 
-  const parser = new DOMParser();
-  const doc = parser.parseFromString(html, 'text/html');
-  const allColors = new Set<string>();
-  const styles: any = { skill_subcategories: [], mission_subcategories: {}, education_subcategories: {} };
-  const sections: any[] = [];
-  const visualElements: any = {};
-  let currentSection: string | null = null;
+    if (!documentXml || !stylesXml) {
+      return new Response("Invalid template DOCX", { status: 400 });
+    }
 
-  const paragraphs = doc.querySelectorAll('p');
-  console.log('Paragraphs found:', paragraphs.length);
+    const document = await parseStringPromise(documentXml);
+    const styles = await parseStringPromise(stylesXml);
+    const rels = relsXml ? await parseStringPromise(relsXml) : null;
 
-  paragraphs.forEach((p: any, index: number) => {
-    const text = p.textContent.trim();
-    if (!text || text.length < 2) return;
-
-    const styleAttr = p.getAttribute('style') || '';
-    const underlineMatch = styleAttr.match(/text-decoration: underline/);
-    const underlineColorMatch = styleAttr.match(/text-decoration-color: (#\w+)/);
-    const tabMatch = text.match(/\t/);
-    const style: any = {
-      font: styleAttr.match(/font-family:([^;]+)/)?.[1]?.trim() || 'Segoe UI Symbol',
-      size: styleAttr.match(/font-size:([^;]+)/)?.[1]?.trim() || '11pt',
-      color: styleAttr.match(/color:(#[0-9a-fA-F]{6})/)?.[1] || '#000000',
-      bold: styleAttr.includes('font-weight:bold'),
-      italic: styleAttr.includes('font-style:italic'),
-      underline: underlineMatch ? { type: 'single', color: underlineColorMatch ? underlineColorMatch[1] : '#000000' } : null,
-      case: text.match(/^[A-Z][a-z]+/) ? 'mixed' : text === text.toUpperCase() ? 'uppercase' : 'lowercase',
-      bullet: p.querySelector('li') || text.match(/^[•\-\*É°\u2022\u25CF]/) ? true : false,
-      alignment: styleAttr.includes('text-align:center') ? 'center' : styleAttr.includes('text-align:right') ? 'right' : 'left',
-      spacingBefore: styleAttr.match(/margin-top:([^;]+)/)?.[1]?.trim() || '0pt',
-      spacingAfter: styleAttr.match(/margin-bottom:([^;]+)/)?.[1]?.trim() || '0pt',
-      lineHeight: styleAttr.match(/line-height:([^;]+)/)?.[1]?.trim() || '1.15',
-      indent: styleAttr.match(/padding-left:([^;]+)/)?.[1]?.trim() || tabMatch ? '5mm' : '0pt'
+    // Extract general page layout from w:sectPr
+    const body = document["w:document"]["w:body"][0];
+    let sectPr = body["w:sectPr"]?.[0];
+    if (!sectPr) {
+      // Check last paragraph for sectPr
+      const lastPara = body["w:p"]?.[body["w:p"].length - 1];
+      if (lastPara && lastPara["w:pPr"]) {
+        sectPr = lastPara["w:pPr"][0]["w:sectPr"]?.[0];
+      }
+    }
+    const pageLayout = {
+      margins: sectPr?.["w:pgMar"]?.[0]?.$ || { top: "1440", bottom: "1440", left: "1440", right: "1440" },
+      orientation: sectPr?.["w:pgSz"]?.[0]?.$?.orient || "portrait",
+      size: sectPr?.["w:pgSz"]?.[0]?.$ || { w: "12240", h: "15840" }, // A4 default in twips
+      columns: sectPr?.["w:cols"]?.[0]?.$?.num || 1,
+      spacing: sectPr?.["w:spacing"]?.[0]?.$?.line || "240",
     };
 
-    if (style.color && style.color !== '#000000') allColors.add(style.color);
-
-    const textLower = text.toLowerCase();
-    const position = index < 2 ? 'header' : index > paragraphs.length - 3 ? 'footer' : 'body';
-
-    // Coordonnées commerciales et logo
-    if (position === 'header') {
-      if (text.match(/contact\s*(commercial|professionnel)/i)) {
-        styles.commercial_contact = { ...style, position, text };
-        visualElements.commercial_contact = { ...style, position, text };
+    // Parse headers and footers
+    const headers = {};
+    const footers = {};
+    for (const file of headerFiles) {
+      const headerXml = await zip.file(file)?.async("string");
+      if (headerXml) {
+        const header = await parseStringPromise(headerXml);
+        const type = file.includes("header1") ? "first" : "default"; // Simplify; check rels for exact
+        headers[type] = extractElements(header["w:hdr"], zip, rels); // Custom extract
       }
-      if (p.querySelector('img')) {
-        visualElements.logo = {
-          present: true,
-          position,
-          alignment: style.alignment,
-          width_emu: 1000000,
-          height_emu: 500000
-        };
+    }
+    for (const file of footerFiles) {
+      const footerXml = await zip.file(file)?.async("string");
+      if (footerXml) {
+        const footer = await parseStringPromise(footerXml);
+        const type = file.includes("footer1") ? "first" : "default";
+        footers[type] = extractElements(footer["w:ftr"], zip, rels);
+      }
+    }
+    const firstPageDifferent = !!headers["first"] || !!footers["first"];
+
+    // Extract elements from body
+    const bodyElements = extractElements(body, zip, rels);
+
+    // Resolve styles by type, detecting inconsistencies
+    const elementStyles = {
+      title: [],
+      commercialCoords: [],
+      logo: [],
+      trigram: [],
+      competencies: [],
+      experiences: { title: [], date: [], company: [], context: [], missions: [], env: [] },
+      formations: { title: [], date: [], place: [] },
+      // Add more subcategories
+    };
+
+    // Combine body, headers, footers for analysis
+    const allElements = { ...bodyElements, headers, footers };
+
+    // Categorize and collect styles using regex
+    Object.keys(allElements).forEach(section => {
+      allElements[section].paragraphs.forEach(para => {
+        const text = para.text;
+        const style = extractStyle(para.pPr, para.rPrs, styles, text);
+        style.position = section; // header, footer, body
+
+        if (/^(CV|Titre|Métier)/i.test(text)) {
+          elementStyles.title.push(style);
+        } else if (/Coordonnées du commercial/i.test(text)) {
+          elementStyles.commercialCoords.push(style);
+        } else if (/Trigramme/i.test(text)) {
+          elementStyles.trigram.push(style);
+        } else if (/(Compétences|Skills)/i.test(text)) {
+          elementStyles.competencies.push(style);
+        } else if (/(Expériences|Professional Experience)/i.test(text)) {
+          elementStyles.experiences.title.push(style);
+        } else if (/\d{2}\/\d{2}\/\d{4}/.test(text)) { // Date example
+          elementStyles.experiences.date.push(style);
+        } // Add more regex for subparts
+        // Similar for other categories
+      });
+
+      // Tables, images, etc.
+      allElements[section].images.forEach(img => {
+        if (img.description?.includes("logo")) {
+          elementStyles.logo.push({ ...img, position: section });
+        }
+      });
+    });
+
+    // Resolve inconsistencies: most common style per type
+    const resolvedStyles = {};
+    for (const type in elementStyles) {
+      if (typeof elementStyles[type] === 'object') {
+        const subResolved = {};
+        for (const sub in elementStyles[type]) {
+          subResolved[sub] = getMostCommonStyle(elementStyles[type][sub]);
+        }
+        resolvedStyles[type] = subResolved;
+      } else {
+        resolvedStyles[type] = getMostCommonStyle(elementStyles[type]);
       }
     }
 
-    // Sections
-    let sectionDetected = false;
-    for (const [sectionKey, keywords] of Object.entries(sectionKeywords)) {
-      if (keywords.some(keyword => textLower.includes(keyword))) {
-        currentSection = sectionKey;
-        styles[`section_${sectionKey}`] = { ...style, position, text };
-        sections.push({
-          name: sectionKey,
-          position,
-          title_style: {
-            ...style,
-            case: sectionKey === 'Compétences' ? 'mixed' : style.case,
-            color: sectionKey === 'Compétences' ? '#142D5A' : style.color,
-            font: sectionKey === 'Compétences' ? 'Segoe UI Symbol' : style.font,
-            size: sectionKey === 'Compétences' ? '14pt' : style.size
-          },
-          spacing: { top: style.spacingBefore || '10mm', bottom: style.spacingAfter || '5mm' },
-          paragraph: { alignment: style.alignment }
-        });
-        sectionDetected = true;
-        break;
-      }
-    }
+    // Detect date formats
+    const dateFormats = { mission: detectDateFormat(elementStyles.experiences.date.map(s => s.exampleText || '')) };
 
-    // Sous-catégories
-    if (currentSection === 'Compétences' && !sectionDetected) {
-      const textParts = text.split(/[\t:]/).map(t => t.trim());
-      if (textParts[0].match(/[A-Z][a-z]+\/[A-Z][a-z]+/) || skillSubcategories.some(sc => textLower.includes(sc.toLowerCase()))) {
-        styles.skill_subcategories.push({
-          name: textParts[0],
-          style: { ...style, bold: false, color: '#329696', font: 'Segoe UI Symbol', size: '11pt' }
-        });
-      } else if (textParts.length > 1 || style.bullet) {
-        styles.skills_item = { ...style, bold: true, color: '#329696', font: 'Segoe UI Symbol', size: '11pt' };
+    // Extract images for logo if any
+    const logoBuffer = elementStyles.logo.length ? await zip.file(elementStyles.logo[0].filePath)?.async("uint8array") : null;
+
+    return new Response(JSON.stringify({ pageLayout, headers, footers, resolvedStyles, firstPageDifferent, dateFormats, logoBuffer: logoBuffer ? btoa(String.fromCharCode(...logoBuffer)) : null }), { status: 200 });
+  } catch (error) {
+    return new Response(error.message, { status: 500 });
+  }
+});
+
+// Helper to extract elements from section (body/header/footer)
+async function extractElements(section, zip, rels) {
+  const paragraphs = extractParagraphs(section);
+  const tables = extractTables(section);
+  const images = await extractImages(section, rels, zip);
+  // Add shapes/icons if w:drawing with v:shape
+  return { paragraphs, tables, images };
+}
+
+// From tool responses: extractParagraphs, extractRunsFromParagraph, etc.
+function extractParagraphs(body) {
+  const paragraphs = [];
+  if (body["w:p"]) {
+    const ps = Array.isArray(body["w:p"]) ? body["w:p"] : [body["w:p"]];
+    ps.forEach(p => {
+      const pPr = p["w:pPr"]?.[0] || {};
+      const rPrs = extractRunsFromParagraph(p).map(run => run.properties);
+      const text = extractTextFromRuns(p);
+      paragraphs.push({ pPr, rPrs, text });
+    });
+  }
+  return paragraphs;
+}
+
+function extractTextFromRuns(p) {
+  let text = '';
+  if (p['w:r']) {
+    const rs = Array.isArray(p['w:r']) ? p['w:r'] : [p['w:r']];
+    rs.forEach(r => {
+      if (r['w:t']) text += (Array.isArray(r['w:t']) ? r['w:t'].join('') : r['w:t']) + ' ';
+    });
+  }
+  return text.trim();
+}
+
+function extractRunsFromParagraph(p) {
+  const runs = [];
+  if (p['w:r']) {
+    const rs = Array.isArray(p['w:r']) ? p['w:r'] : [p['w:r']];
+    rs.forEach(r => {
+      const props = {};
+      if (r['w:rPr']) {
+        const rPr = r['w:rPr'][0];
+        if (rPr['w:b']) props.bold = true;
+        if (rPr['w:i']) props.italic = true;
+        if (rPr['w:sz']) props.size = parseInt(rPr['w:sz'][0]?.$?.val || '0') / 2;
+        if (rPr['w:color']) props.color = rPr['w:color'][0]?.$?.val;
+        if (rPr['w:u']) props.underline = rPr['w:u'][0]?.$?.val;
+        if (rPr['w:u'] && rPr['w:u'][0]?.$?.color) props.underlineColor = rPr['w:u'][0]?.$?.color;
+        if (rPr['w:rFonts']) props.font = rPr['w:rFonts'][0]?.$?.ascii;
+        // Effects like w:effect, w:strike, etc.
       }
-    } else if (currentSection === 'Expérience' && !sectionDetected) {
-      if (text.match(/^\d{2}\/\d{4}\s*-\s*\d{2}\/\d{4}\s*.*@.*/)) {
-        styles.mission_title = { ...style, text };
-      } else if (textLower.includes('contexte') || textLower.includes('objectif')) {
-        styles.mission_context = { ...style, text };
-      } else if (textLower.includes('mission') || textLower.includes('tâche')) {
-        styles.mission_achievements = { ...style, text, bullet: style.bullet };
-      } else if (textLower.includes('environnement') || textLower.includes('technologie')) {
-        styles.mission_environment = { ...style, text };
-      } else if (text.match(/lieu|ville|city/i)) {
-        styles.mission_location = { ...style, text };
+      const text = r['w:t'] ? (Array.isArray(r['w:t']) ? r['w:t'].join('') : r['w:t']) : '';
+      runs.push({ properties: props, text });
+    });
+  }
+  return runs;
+}
+
+async function extractImages(doc, rels, zip) {
+  const images = [];
+  const relMap = new Map();
+  if (rels && rels['Relationships'] && rels['Relationships']['Relationship']) {
+    const relationships = Array.isArray(rels['Relationships']['Relationship']) ? rels['Relationships']['Relationship'] : [rels['Relationships']['Relationship']];
+    relationships.forEach(r => {
+      if (r.$?.Type.includes('image')) {
+        relMap.set(r.$?.Id, r.$?.Target);
       }
-    } else if (currentSection === 'Formations & Certifications' && !sectionDetected) {
-      if (text.match(/^\d{4}\s*[A-Z][a-z]+|^[A-Z][a-z]+\s*@\s*[A-Z]/i)) {
-        styles.education_degree = { ...style, text };
-      } else if (text.match(/lieu|ville|city|organisme|université|école/i)) {
-        styles.education_details = { ...style, text };
+    });
+  }
+
+  // Traverse for w:drawing
+  // Simplified: assume in body["w:p"] or section
+  (section["w:p"] || []).forEach(p => {
+    if (p['w:r'] && p['w:r'].some(r => r['w:drawing'])) {
+      const drawing = p['w:r'].find(r => r['w:drawing'])['w:drawing'][0];
+      const blip = drawing['wp:inline']?.[0]?.['a:graphic']?.[0]?.['a:graphicData']?.[0]?.['pic:pic']?.[0]?.['pic:blipFill']?.[0]?.['a:blip']?.[0];
+      const relId = blip?.$?.['r:embed'];
+      const target = relMap.get(relId);
+      if (target) {
+        const filePath = target.startsWith('../media') ? 'word/media' + target.slice(2) : target;
+        const buffer = await zip.file(filePath)?.async("uint8array");
+        images.push({ filePath, buffer, description: drawing['wp:docPr']?.[0]?.$?.descr || '' });
       }
     }
   });
-
-  const structureData = {
-    colors: {
-      primary: '#142D5A',
-      text: '#000000',
-      secondary: '#329696'
-    },
-    fonts: {
-      title_font: 'Segoe UI Symbol',
-      body_font: 'Segoe UI Symbol',
-      title_size: '14pt',
-      body_size: '11pt',
-      title_weight: 'bold',
-      line_height: '1.15'
-    },
-    spacing: {
-      section_spacing: '12pt',
-      element_spacing: '6pt',
-      padding: '10mm',
-      line_spacing: '1.15'
-    },
-    layout: {
-      margins: { top: '20mm', right: '15mm', bottom: '20mm', left: '15mm' },
-      orientation: 'portrait',
-      size: 'A4',
-      columns: 1
-    },
-    sections,
-    visual_elements: visualElements,
-    element_styles: styles
-  };
-
-  console.log('StructureData:', JSON.stringify(structureData, null, 2));
-
-  await supabase
-    .from('cv_templates')
-    .update({ structure_data: structureData })
-    .eq('id', templateId);
-
-  return structureData;
+  return images;
 }
 
-serve(async (req) => {
-  if (req.method === 'OPTIONS') {
-    return new Response(null, { headers: corsHeaders });
+function extractTables(body) {
+  // Similar to tool response
+  const tables = [];
+  if (body['w:tbl']) {
+    const tbls = Array.isArray(body['w:tbl']) ? body['w:tbl'] : [body['w:tbl']];
+    tbls.forEach(tbl => {
+      const table = { rows: [] };
+      if (tbl['w:tr']) {
+        const trs = Array.isArray(tbl['w:tr']) ? tbl['w:tr'] : [tbl['w:tr']];
+        trs.forEach(tr => {
+          const row = [];
+          if (tr['w:tc']) {
+            const tcs = Array.isArray(tr['w:tc']) ? tr['w:tc'] : [tr['w:tc']];
+            tcs.forEach(tc => {
+              const text = extractTextFromRuns(tc);
+              row.push({ text, pPr: tc['w:p']?.[0]?.['w:pPr']?.[0] });
+            });
+          }
+          table.rows.push(row);
+        });
+      }
+      tables.push(table);
+    });
   }
+  return tables;
+}
 
-  try {
-    const { templateId } = await req.json();
-    if (!templateId) throw new Error('templateId is required');
-
-    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
-    const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-    const supabase = createClient(supabaseUrl, supabaseKey);
-
-    const { data: template, error: templateError } = await supabase
-      .from('cv_templates')
-      .select('template_file_path')
-      .eq('id', templateId)
-      .single();
-
-    if (templateError || !template) throw new Error('Template not found');
-
-    const { data: templateFileData, error: fileError } = await supabase
-      .storage
-      .from('cv_templates')
-      .download(template.template_file_path);
-
-    if (fileError || !templateFileData) throw new Error('Failed to download template file');
-
-    const arrayBuffer = await templateFileData.arrayBuffer();
-    const structureData = await analyzeDocxTemplate(arrayBuffer, templateId, supabase);
-
-    return new Response(
-      JSON.stringify({ success: true, templateId, structureData }),
-      { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 }
-    );
-
-  } catch (error) {
-    console.error('Error in analyze-template:', error);
-    return new Response(
-      JSON.stringify({ error: error instanceof Error ? error.message : 'Unknown error' }),
-      { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 500 }
-    );
+function extractStyle(pPr, rPrs, globalStyles, text) {
+  const style = {
+    font: rPrs[0]?.font || "Arial",
+    size: rPrs[0]?.size || 12,
+    bold: !!rPrs[0]?.bold,
+    italic: !!rPrs[0]?.italic,
+    underline: rPrs[0]?.underline || null,
+    underlineColor: rPrs[0]?.underlineColor || null,
+    color: rPrs[0]?.color || "000000",
+    effects: rPrs[0]?.effect || null, // e.g., shadow, outline
+    alignment: pPr["w:jc"]?.[0]?.$?.val || "left",
+    indent: pPr["w:ind"]?.[0]?.$?.left || 0,
+    spacing: pPr["w:spacing"]?.[0]?.$?.after || 0,
+    background: pPr["w:shd"]?.[0]?.$?.fill || null,
+    borders: pPr["w:pBdr"] ? extractBorders(pPr["w:pBdr"][0]) : null,
+    bullets: pPr["w:numPr"] ? true : false,
+    case: detectCase(text),
+    exampleText: text, // For date formats
+    // Table if inside tbl, icon if drawing without blip
+  };
+  // Link to global style if pPr["w:pStyle"]
+  if (pPr["w:pStyle"]) {
+    const styleId = pPr["w:pStyle"][0]?.$?.val;
+    const globalStyle = globalStyles["w:styles"]["w:style"].find(s => s.$?.["w:type"] === "paragraph" && s.$?.["w:styleId"] === styleId);
+    if (globalStyle) {
+      // Merge from global
+      const globalRPr = globalStyle["w:rPr"]?.[0];
+      if (globalRPr) {
+        style.font = globalRPr["w:rFonts"]?.[0]?.$?.ascii || style.font;
+        // etc.
+      }
+    }
   }
-});
+  return style;
+}
+
+function extractBorders(pBdr) {
+  return {
+    top: pBdr["w:top"]?.[0]?.$ || null,
+    bottom: pBdr["w:bottom"]?.[0]?.$ || null,
+    left: pBdr["w:left"]?.[0]?.$ || null,
+    right: pBdr["w:right"]?.[0]?.$ || null,
+  };
+}
+
+function detectCase(text) {
+  if (!text) return 'mixed';
+  if (text === text.toUpperCase()) return 'upper';
+  if (text === text.toLowerCase()) return 'lower';
+  if (text === text[0].toUpperCase() + text.slice(1).toLowerCase()) return 'title';
+  return 'mixed';
+}
+
+function getMostCommonStyle(styles) {
+  if (!styles.length) return {};
+  const counts = new Map();
+  styles.forEach(s => {
+    const key = JSON.stringify(s);
+    counts.set(key, (counts.get(key) || 0) + 1);
+  });
+  const maxKey = Array.from(counts.entries()).reduce((a, b) => b[1] > a[1] ? b : a)[0];
+  return JSON.parse(maxKey);
+}
+
+function detectDateFormat(dateStrings) {
+  const patterns = dateStrings.map(d => d.match(/\d+([\/-])\d+([\/-])\d+/)?[0] : null).filter(Boolean);
+  if (!patterns.length) return 'DD/MM/YYYY';
+  const countMap = patterns.reduce((acc, p) => { acc[p] = (acc[p] || 0) + 1; return acc; }, {});
+  return Object.keys(countMap).reduce((a, b) => countMap[a] > countMap[b] ? a : b);
+}
