@@ -13,147 +13,76 @@ const sectionKeywords = {
   'Formations & Certifications': ['formation', 'formations', 'certification', 'certifications', 'diplôme', 'diplome', 'education', 'études', 'etudes', 'study', 'studies']
 };
 
-const skillSubcategories = ['Langage/BDD', 'OS', 'Outils', 'Méthodologies'];
-const missionSubcategories = ['titre', 'date', 'entreprise', 'lieu', 'contexte', 'objectif', 'missions', 'tâches', 'environnement', 'technologies'];
-const educationSubcategories = ['diplôme', 'date', 'lieu', 'organisme'];
-
 async function analyzeDocxTemplate(arrayBuffer: ArrayBuffer, templateId: string, supabase: any) {
-  const { value: html, messages } = await convert({ 
-    arrayBuffer,
-    includeEmbeddedStyleMap: true,
-    extractRawText: true,
-    includeDefaultStyleMap: true
-  });
+  const { value: html } = await convert({ arrayBuffer });
   console.log('Extracted HTML from template:', html.substring(0, 500));
-  console.log('Mammoth messages:', messages);
 
   const parser = new DOMParser();
   const doc = parser.parseFromString(html, 'text/html');
   const allColors = new Set<string>();
   const styles: any = { skill_subcategories: [], mission_subcategories: {}, education_subcategories: {} };
   const sections: any[] = [];
-  const visualElements: any = { header: {}, footer: {} };
+  const visualElements: any = {};
   let currentSection: string | null = null;
 
-  // Analyse des en-têtes et pieds de page
-  const headerElements = doc.querySelectorAll('header p');
-  const footerElements = doc.querySelectorAll('footer p');
-  console.log('Header elements:', headerElements.length, 'Footer elements:', footerElements.length);
+  const paragraphs = doc.querySelectorAll('p');
+  console.log('Paragraphs found:', paragraphs.length);
 
-  // En-tête : logo et coordonnées commerciales
-  headerElements.forEach((p: any) => {
-    const text = p.textContent.trim();
-    if (!text) return;
-
-    const styleAttr = p.getAttribute('style') || '';
-    const style = {
-      font: styleAttr.match(/font-family:([^;]+)/)?.[1]?.trim() || 'Segoe UI Symbol',
-      size: styleAttr.match(/font-size:([^;]+)/)?.[1]?.trim() || '11pt',
-      color: styleAttr.match(/color:(#[0-9a-fA-F]{6})/)?.[1] || '#000000',
-      bold: styleAttr.includes('font-weight:bold'),
-      italic: styleAttr.includes('font-style:italic'),
-      underline: styleAttr.includes('text-decoration:underline') ? { type: 'single', color: styleAttr.match(/text-decoration-color:(#[0-9a-fA-F]{6})/)?.[1] || '#000000' } : null,
-      case: text.match(/^[A-Z][a-z]+/) ? 'mixed' : text === text.toUpperCase() ? 'uppercase' : 'lowercase',
-      alignment: styleAttr.includes('text-align:center') ? 'center' : styleAttr.includes('text-align:right') ? 'right' : 'left',
-      spacingBefore: styleAttr.match(/margin-top:([^;]+)/)?.[1]?.trim() || '0pt',
-      spacingAfter: styleAttr.match(/margin-bottom:([^;]+)/)?.[1]?.trim() || '6pt',
-      lineHeight: styleAttr.match(/line-height:([^;]+)/)?.[1]?.trim() || '1.15',
-      indent: styleAttr.match(/padding-left:([^;]+)/)?.[1]?.trim() || text.match(/\t/) ? '5mm' : '0pt'
-    };
-
-    if (text.match(/contact\s*(commercial|professionnel)/i)) {
-      styles.commercial_contact = { ...style, position: 'header', text };
-      visualElements.header.commercial_contact = { ...style, text };
-    }
-    if (text.match(/^[A-Z]{3}$/)) {
-      styles.trigram = { ...style, position: 'header', text };
-      visualElements.header.trigram = { ...style, text };
-    }
-    if (text.match(/architecte|ingénieur|consultant|expert|owner/i)) {
-      styles.title = { ...style, position: 'header', text };
-      visualElements.header.title = { ...style, text };
-    }
-  });
-
-  // Logo dans l'en-tête ou le pied de page
-  const headerImages = doc.querySelectorAll('header img');
-  const footerImages = doc.querySelectorAll('footer img');
-  if (headerImages.length > 0) {
-    visualElements.header.logo = {
-      present: true,
-      alignment: headerImages[0].getAttribute('style')?.includes('text-align:center') ? 'center' : 'left',
-      width_emu: 1000000,
-      height_emu: 500000
-    };
-  }
-  if (footerImages.length > 0) {
-    visualElements.footer.logo = {
-      present: true,
-      alignment: footerImages[0].getAttribute('style')?.includes('text-align:center') ? 'center' : 'left',
-      width_emu: 1000000,
-      height_emu: 500000
-    };
-  }
-
-  // Pied de page : texte
-  footerElements.forEach((p: any) => {
-    const text = p.textContent.trim();
-    if (!text) return;
-
-    const styleAttr = p.getAttribute('style') || '';
-    const style = {
-      font: styleAttr.match(/font-family:([^;]+)/)?.[1]?.trim() || 'Segoe UI Symbol',
-      size: styleAttr.match(/font-size:([^;]+)/)?.[1]?.trim() || '10pt',
-      color: styleAttr.match(/color:(#[0-9a-fA-F]{6})/)?.[1] || '#000000',
-      bold: styleAttr.includes('font-weight:bold'),
-      italic: styleAttr.includes('font-style:italic'),
-      underline: styleAttr.includes('text-decoration:underline') ? { type: 'single', color: styleAttr.match(/text-decoration-color:(#[0-9a-fA-F]{6})/)?.[1] || '#000000' } : null,
-      alignment: styleAttr.includes('text-align:center') ? 'center' : styleAttr.includes('text-align:right') ? 'right' : 'left',
-      spacingBefore: styleAttr.match(/margin-top:([^;]+)/)?.[1]?.trim() || '0pt',
-      spacingAfter: styleAttr.match(/margin-bottom:([^;]+)/)?.[1]?.trim() || '0pt',
-      lineHeight: styleAttr.match(/line-height:([^;]+)/)?.[1]?.trim() || '1.15'
-    };
-    visualElements.footer.text = { ...style, text };
-  });
-
-  // Corps du document
-  const paragraphs = doc.querySelectorAll('body p');
-  console.log('Body paragraphs found:', paragraphs.length);
-
-  paragraphs.forEach((p: any) => {
+  paragraphs.forEach((p: any, index: number) => {
     const text = p.textContent.trim();
     if (!text || text.length < 2) return;
 
     const styleAttr = p.getAttribute('style') || '';
+    const underlineMatch = styleAttr.match(/text-decoration: underline/);
+    const underlineColorMatch = styleAttr.match(/text-decoration-color: (#\w+)/);
+    const tabMatch = text.match(/\t/);
     const style: any = {
       font: styleAttr.match(/font-family:([^;]+)/)?.[1]?.trim() || 'Segoe UI Symbol',
       size: styleAttr.match(/font-size:([^;]+)/)?.[1]?.trim() || '11pt',
       color: styleAttr.match(/color:(#[0-9a-fA-F]{6})/)?.[1] || '#000000',
       bold: styleAttr.includes('font-weight:bold'),
       italic: styleAttr.includes('font-style:italic'),
-      underline: styleAttr.includes('text-decoration:underline') ? { type: 'single', color: styleAttr.match(/text-decoration-color:(#[0-9a-fA-F]{6})/)?.[1] || '#000000' } : null,
+      underline: underlineMatch ? { type: 'single', color: underlineColorMatch ? underlineColorMatch[1] : '#000000' } : null,
       case: text.match(/^[A-Z][a-z]+/) ? 'mixed' : text === text.toUpperCase() ? 'uppercase' : 'lowercase',
       bullet: p.querySelector('li') || text.match(/^[•\-\*É°\u2022\u25CF]/) ? true : false,
       alignment: styleAttr.includes('text-align:center') ? 'center' : styleAttr.includes('text-align:right') ? 'right' : 'left',
       spacingBefore: styleAttr.match(/margin-top:([^;]+)/)?.[1]?.trim() || '0pt',
-      spacingAfter: styleAttr.match(/margin-bottom:([^;]+)/)?.[1]?.trim() || '6pt',
+      spacingAfter: styleAttr.match(/margin-bottom:([^;]+)/)?.[1]?.trim() || '0pt',
       lineHeight: styleAttr.match(/line-height:([^;]+)/)?.[1]?.trim() || '1.15',
-      indent: styleAttr.match(/padding-left:([^;]+)/)?.[1]?.trim() || text.match(/\t/) ? '5mm' : '0pt'
+      indent: styleAttr.match(/padding-left:([^;]+)/)?.[1]?.trim() || tabMatch ? '5mm' : '0pt'
     };
 
     if (style.color && style.color !== '#000000') allColors.add(style.color);
 
     const textLower = text.toLowerCase();
+    const position = index < 2 ? 'header' : index > paragraphs.length - 3 ? 'footer' : 'body';
+
+    // Coordonnées commerciales et logo
+    if (position === 'header') {
+      if (text.match(/contact\s*(commercial|professionnel)/i)) {
+        styles.commercial_contact = { ...style, position, text };
+        visualElements.commercial_contact = { ...style, position, text };
+      }
+      if (p.querySelector('img')) {
+        visualElements.logo = {
+          present: true,
+          position,
+          alignment: style.alignment,
+          width_emu: 1000000,
+          height_emu: 500000
+        };
+      }
+    }
 
     // Sections
     let sectionDetected = false;
     for (const [sectionKey, keywords] of Object.entries(sectionKeywords)) {
       if (keywords.some(keyword => textLower.includes(keyword))) {
         currentSection = sectionKey;
-        styles[`section_${sectionKey}`] = { ...style, position: 'body', text };
+        styles[`section_${sectionKey}`] = { ...style, position, text };
         sections.push({
           name: sectionKey,
-          position: 'body',
+          position,
           title_style: {
             ...style,
             case: sectionKey === 'Compétences' ? 'mixed' : style.case,
@@ -172,32 +101,17 @@ async function analyzeDocxTemplate(arrayBuffer: ArrayBuffer, templateId: string,
     // Sous-catégories
     if (currentSection === 'Compétences' && !sectionDetected) {
       const textParts = text.split(/[\t:]/).map(t => t.trim());
-      if (skillSubcategories.some(sc => textLower.includes(sc.toLowerCase()))) {
+      if (textParts[0].match(/[A-Z][a-z]+\/[A-Z][a-z]+/) || skillSubcategories.some(sc => textLower.includes(sc.toLowerCase()))) {
         styles.skill_subcategories.push({
           name: textParts[0],
           style: { ...style, bold: false, color: '#329696', font: 'Segoe UI Symbol', size: '11pt' }
         });
       } else if (textParts.length > 1 || style.bullet) {
-        styles.skills_item = {
-          ...style,
-          bold: true,
-          color: '#329696',
-          font: 'Segoe UI Symbol',
-          size: '11pt'
-        };
+        styles.skills_item = { ...style, bold: true, color: '#329696', font: 'Segoe UI Symbol', size: '11pt' };
       }
     } else if (currentSection === 'Expérience' && !sectionDetected) {
-      if (text.match(/^\d{2}\/\d{4}\s*-\s*\d{2}\/\d{4}|^[A-Z][a-z]+\s*@/i)) {
-        styles.mission_title = { 
-          ...style, 
-          text, 
-          color: '#142D5A', 
-          font: 'Segoe UI Symbol', 
-          size: '11pt', 
-          spacingAfter: '6pt', 
-          lineHeight: '1.15', 
-          indent: '0mm' 
-        };
+      if (text.match(/^\d{2}\/\d{4}\s*-\s*\d{2}\/\d{4}\s*.*@.*/)) {
+        styles.mission_title = { ...style, text };
       } else if (textLower.includes('contexte') || textLower.includes('objectif')) {
         styles.mission_context = { ...style, text };
       } else if (textLower.includes('mission') || textLower.includes('tâche')) {
