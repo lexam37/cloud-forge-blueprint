@@ -157,7 +157,6 @@ serve(async (req) => {
               if (currentMission) currentMission.environment = { text, style };
             } else if (text.match(/lieu|ville|city/i)) {
               if (currentMission) currentMission.location = { text, style };
-              }
             } else {
               structuredData.push({ text, style, section: currentSection });
             }
