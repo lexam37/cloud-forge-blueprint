@@ -68,13 +68,12 @@ serve(async (req: Request) => {
       throw uploadError;
     }
 
-    // Insertion dans processing_logs (commenté)
-    // await supabase.from('processing_logs').insert({
-    //   cv_document_id: cvDocumentId,
-    //   step: 'generation',
-    //   message: 'CV Word generated successfully',
-    //   user_id: user.id
-    // });
+    await supabase.from('processing_logs').insert({
+      cv_document_id: cvDocumentId,
+      step: 'generation',
+      message: 'CV Word generated successfully',
+      user_id: user.id
+    });
 
     await supabase
       .from('cv_documents')
@@ -98,15 +97,25 @@ serve(async (req: Request) => {
 
   } catch (error) {
     console.error('Error in generate-cv-word:', error);
-    // Insertion dans processing_logs (commenté)
-    // const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
-    // const { data: { user } } = await supabase.auth.getUser();
-    // await supabase.from('processing_logs').insert({
-    //   cv_document_id: cvDocumentId,
-    //   step: 'error',
-    //   message: error instanceof Error ? error.message : 'Unknown error',
-    //   user_id: user?.id || null
-    // });
+    const { cvDocumentId } = await req.json().catch(() => ({})) as { cvDocumentId?: string };
+    if (cvDocumentId) {
+      const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
+      const { data: { user } } = await supabase.auth.getUser();
+      await supabase.from('processing_logs').insert({
+        cv_document_id: cvDocumentId,
+        step: 'error',
+        message: error instanceof Error ? error.message : 'Unknown error',
+        user_id: user?.id || null
+      });
+      await supabase
+        .from('cv_documents')
+        .update({ 
+          status: 'error',
+          error_message: error instanceof Error ? error.message : 'Unknown error'
+        })
+        .eq('id', cvDocumentId)
+        .eq('user_id', user?.id || null);
+    }
     return new Response(
       JSON.stringify({ error: error instanceof Error ? error.message : 'Unknown error' }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 500 }
