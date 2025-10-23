@@ -28,7 +28,7 @@ serve(async (req) => {
     const lovableApiKey = Deno.env.get('LOVABLE_API_KEY')!;
     const supabase = createClient(supabaseUrl, supabaseKey);
 
-    // Vérifier l'utilisateur authentifié
+    // Vérifier l'utilisateur authentifié (pour RLS)
     const { data: { user }, error: authError } = await supabase.auth.getUser();
     if (authError || !user) throw new Error('User not authenticated');
 
@@ -39,7 +39,7 @@ serve(async (req) => {
       .from('cv_documents')
       .select('*, cv_templates(structure_data)')
       .eq('id', cvDocumentId)
-      .eq('user_id', user.id) // Restreindre à l'utilisateur
+      .eq('user_id', user.id) // RLS : restreindre à l'utilisateur
       .single();
 
     if (cvError || !cvDoc) throw new Error('CV document not found or not owned by user');
@@ -49,7 +49,7 @@ serve(async (req) => {
     const skillSubcategories = templateStructure.element_styles?.skill_subcategories?.map((sc: any) => sc.name) || ['Langage/BDD', 'OS', 'Outils', 'Méthodologies'];
     const hasCommercialContact = templateStructure.element_styles?.commercial_contact?.position === 'header';
 
-    // Commenté car processing_logs n'existe pas encore
+    // Insertion dans processing_logs (commenté car table n'existe pas)
     // await supabase.from('processing_logs').insert({
     //   cv_document_id: cvDocumentId,
     //   step: 'extraction',
@@ -240,7 +240,7 @@ serve(async (req) => {
    - Date : année ou MM/YYYY.
    - Institution/Organisme : nom (ex. : "Aix-Marseille III").
    - Lieu : si mentionné.
-7. Identifier dans l’EN-TÊTE : trigramme (ex. : "CVA"), titre professionnel (ex. : "Analyste Fonctionnel / Product Owner"), coordonnées commerciales (ex. : "Contact Commercial").
+7. Identifier dans l'EN-TÊTE : trigramme (ex. : "CVA"), titre professionnel (ex. : "Analyste Fonctionnel / Product Owner"), coordonnées commerciales (ex. : "Contact Commercial").
 8. Identifier dans le PIED DE PAGE : tout texte ou élément (ex. : numéro de page, logo).
 9. Conserver la casse exacte des titres de section ("Compétences", "Expérience", "Formations & Certifications").
 
@@ -341,7 +341,7 @@ Retourne un JSON avec cette structure :
     };
     console.log('ExtractedData:', JSON.stringify(extractedData, null, 2));
 
-    // Commenté car processing_logs n'existe pas encore
+    // Insertion dans processing_logs (commenté car table n'existe pas)
     // await supabase.from('processing_logs').insert({
     //   cv_document_id: cvDocumentId,
     //   step: 'extraction',
@@ -359,7 +359,7 @@ Retourne un JSON avec cette structure :
         processing_time_ms: processingTime
       })
       .eq('id', cvDocumentId)
-      .eq('user_id', user.id);
+      .eq('user_id', user.id); // RLS
 
     return new Response(
       JSON.stringify({ 
@@ -377,7 +377,7 @@ Retourne un JSON avec cette structure :
     if (cvDocumentId) {
       const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
       const { data: { user } } = await supabase.auth.getUser();
-      // Commenté car processing_logs n'existe pas encore
+      // Insertion dans processing_logs (commenté)
       // await supabase.from('processing_logs').insert({
       //   cv_document_id: cvDocumentId,
       //   step: 'error',
@@ -391,7 +391,7 @@ Retourne un JSON avec cette structure :
           error_message: error instanceof Error ? error.message : 'Unknown error'
         })
         .eq('id', cvDocumentId)
-        .eq('user_id', user?.id || null);
+        .eq('user_id', user?.id || null); // RLS
     }
     return new Response(
       JSON.stringify({ error: error instanceof Error ? error.message : 'Unknown error' }),
