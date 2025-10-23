@@ -1,7 +1,8 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.75.0";
-import { convert } from "https://deno.land/x/deno_mammoth@v0.1.0/mod.ts"; // Remplacement de mammoth
-import { DOMParser } from "https://deno.land/std@0.168.0/dom/mod.ts"; // Import DOMParser
+import { convert } from "https://deno.land/x/deno_mammoth@v0.1.0/mod.ts";
+import { DOMParser } from "https://deno.land/std@0.168.0/dom/mod.ts";
+import { z } from "https://deno.land/x/zod@v3.21.4/mod.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -38,36 +39,29 @@ const sectionKeywords: Record<string, string[]> = {
   'Formations & Certifications': ['formation', 'formations', 'certification', 'certifications', 'diplôme', 'diplome', 'education', 'études', 'etudes', 'study', 'studies']
 };
 
+const requestSchema = z.object({
+  templateId: z.string().uuid({ message: 'templateId must be a valid UUID' })
+});
+
 serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
   }
 
   try {
-    console.log('Received request at', new Date().toISOString());
-    const { templateId } = await req.json() as { templateId: string };
+    const { templateId } = requestSchema.parse(await req.json());
     console.log('Processing templateId:', templateId);
-
-    if (!templateId) {
-      throw new Error('templateId is required');
-    }
 
     const supabaseUrl = Deno.env.get('SUPABASE_URL');
     const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+    if (!supabaseUrl || !supabaseKey) throw new Error('Missing environment variables');
 
-    if (!supabaseUrl || !supabaseKey) {
-      console.error('Missing environment variables: SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY');
-      throw new Error('Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY');
-    }
-
-    console.log('Creating Supabase client with URL:', supabaseUrl.substring(0, 20) + '...');
     const supabase = createClient(supabaseUrl, supabaseKey);
 
     // Vérifier l'utilisateur authentifié (pour RLS)
     const { data: { user }, error: authError } = await supabase.auth.getUser();
     if (authError || !user) throw new Error('User not authenticated');
 
-    console.log('Fetching template from cv_templates for user:', user.id);
     const { data: template, error: templateError } = await supabase
       .from('cv_templates')
       .select('template_file_path')
@@ -75,25 +69,16 @@ serve(async (req: Request) => {
       .eq('user_id', user.id) // RLS
       .single();
 
-    if (templateError || !template) {
-      console.error('Template fetch error:', templateError);
-      throw new Error('Template not found or not owned by user');
-    }
+    if (templateError || !template) throw new Error('Template not found or not owned by user');
 
-    console.log('Template found, downloading file:', template.template_file_path);
     const { data: templateFileData, error: fileError } = await supabase
       .storage
       .from('cv_templates')
       .download(template.template_file_path);
 
-    if (fileError || !templateFileData) {
-      console.error('File download error:', fileError);
-      throw new Error('Failed to download template file');
-    }
+    if (fileError || !templateFileData) throw new Error('Failed to download template file');
 
-    console.log('Template file downloaded, size:', templateFileData.size, 'bytes');
     const arrayBuffer = await templateFileData.arrayBuffer();
-
     const structureData = await analyzeDocxTemplate(arrayBuffer, templateId, supabase, user.id);
 
     await supabase.from('processing_logs').insert({
@@ -241,18 +226,14 @@ function extractSectionsAndSubcategories(
 }
 
 async function analyzeDocxTemplate(arrayBuffer: ArrayBuffer, templateId: string, supabase: any, userId: string) {
-  console.log('Starting DOCX template analysis for templateId:', templateId);
-
   const { value: html, messages } = await convert({ arrayBuffer });
   if (messages.length > 0) {
     console.warn('Mammoth conversion warnings:', messages);
   }
-  console.log('Extracted HTML from template (first 500 chars):', html.substring(0, 500));
 
   const parser = new DOMParser();
   const doc = parser.parseFromString(html, 'text/html');
   const paragraphs = doc.querySelectorAll('p');
-  console.log('Paragraphs found:', paragraphs.length);
 
   const allColors = new Set<string>();
   const styles: any = { skill_subcategories: [], mission_subcategories: {}, education_subcategories: {} };
@@ -315,19 +296,13 @@ async function analyzeDocxTemplate(arrayBuffer: ArrayBuffer, templateId: string,
     element_styles: styles,
   };
 
-  console.log('Generated structureData:', JSON.stringify(structureData, null, 2));
-
   const { error: updateError } = await supabase
     .from('cv_templates')
     .update({ structure_data: structureData })
     .eq('id', templateId)
     .eq('user_id', userId); // RLS
 
-  if (updateError) {
-    console.error('Failed to update cv_templates:', updateError);
-    throw new Error(`Failed to update template: ${updateError.message}`);
-  }
+  if (updateError) throw new Error(`Failed to update template: ${updateError.message}`);
 
-  console.log('Template structure data updated successfully');
   return structureData;
 }
