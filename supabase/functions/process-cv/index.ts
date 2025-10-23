@@ -158,8 +158,8 @@ serve(async (req: Request) => {
           }
 
           if (currentSection === 'Compétences' && !isSection) {
-            const textParts = text.split(/[\t:]/).map(t => t.trim());
-            if (skillSubcategories.some(sc => textLower.includes(sc.toLowerCase()))) {
+            const textParts = text.split(/[\t:]/).map((t: string) => t.trim());
+            if (skillSubcategories.some((sc: string) => textLower.includes(sc.toLowerCase()))) {
               if (skillItems.length > 0) {
                 structuredData.push({
                   text: `${currentSubcategory}: ${skillItems.join(', ')}`,
