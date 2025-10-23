@@ -32,16 +32,21 @@ serve(async (req) => {
     console.log('Creating Supabase client with URL:', supabaseUrl.substring(0, 20) + '...');
     const supabase = createClient(supabaseUrl, supabaseKey);
 
+    // Vérifier l'utilisateur authentifié
+    const { data: { user }, error: authError } = await supabase.auth.getUser();
+    if (authError || !user) throw new Error('User not authenticated');
+
     console.log('Fetching template from cv_templates...');
     const { data: template, error: templateError } = await supabase
       .from('cv_templates')
       .select('template_file_path')
       .eq('id', templateId)
+      .eq('user_id', user.id) // Restreindre à l'utilisateur
       .single();
 
     if (templateError || !template) {
       console.error('Template fetch error:', templateError);
-      throw new Error('Template not found');
+      throw new Error('Template not found or not owned by user');
     }
 
     console.log('Template found, downloading file:', template.template_file_path);
@@ -58,7 +63,7 @@ serve(async (req) => {
     console.log('Template file downloaded, size:', templateFileData.size, 'bytes');
     const arrayBuffer = await templateFileData.arrayBuffer();
 
-    const structureData = await analyzeDocxTemplate(arrayBuffer, templateId, supabase);
+    const structureData = await analyzeDocxTemplate(arrayBuffer, templateId, supabase, user.id);
 
     return new Response(
       JSON.stringify({ success: true, templateId, structureData, message: 'Template analyzed successfully' }),
@@ -220,7 +225,7 @@ function extractSectionsAndSubcategories(
   return newCurrentSection;
 }
 
-async function analyzeDocxTemplate(arrayBuffer: ArrayBuffer, templateId: string, supabase: any) {
+async function analyzeDocxTemplate(arrayBuffer: ArrayBuffer, templateId: string, supabase: any, userId: string) {
   console.log('Starting DOCX template analysis for templateId:', templateId);
 
   const { value: html, messages } = await convert({ arrayBuffer });
@@ -300,7 +305,8 @@ async function analyzeDocxTemplate(arrayBuffer: ArrayBuffer, templateId: string,
   const { error: updateError } = await supabase
     .from('cv_templates')
     .update({ structure_data: structureData })
-    .eq('id', templateId);
+    .eq('id', templateId)
+    .eq('user_id', userId); // Restreindre à l'utilisateur
 
   if (updateError) {
     console.error('Failed to update cv_templates:', updateError);
