@@ -1,31 +1,60 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { convert } from "https://esm.sh/mammoth@1.6.0";
-import { parse as parsePdf } from "https://esm.sh/pdf-parse@1.1.1";
+import { convert } from "https://deno.land/x/deno_mammoth@v0.1.0/mod.ts"; // Remplacement de mammoth
+import { DOMParser } from "https://deno.land/std@0.168.0/dom/mod.ts"; // Import DOMParser pour Deno
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-const sectionKeywords = {
+interface Style {
+  font: string;
+  size: string;
+  color: string;
+  bold: boolean;
+  italic: boolean;
+  underline: { type: string; color: string } | null;
+  case: string;
+  bullet: boolean;
+  alignment: string;
+  spacingBefore: string;
+  spacingAfter: string;
+  lineHeight: string;
+  indent: string;
+}
+
+interface StructuredData {
+  text: string;
+  style: Style;
+  section: string;
+  subcategory?: string;
+  context?: { text: string; style: Style };
+  achievements?: { text: string; style: Style }[];
+  environment?: { text: string; style: Style };
+  location?: { text: string; style: Style };
+}
+
+const sectionKeywords: Record<string, string[]> = {
   'Compétences': ['compétence', 'competence', 'skills', 'compétences', 'savoir-faire'],
   'Expérience': ['expérience', 'experience', 'expériences', 'work history', 'professional experience'],
   'Formations & Certifications': ['formation', 'formations', 'certification', 'certifications', 'diplôme', 'diplome', 'education', 'études', 'etudes', 'study', 'studies']
 };
 
-serve(async (req) => {
+serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
   }
 
   try {
-    const { cvDocumentId } = await req.json();
+    const { cvDocumentId } = await req.json() as { cvDocumentId: string };
     if (!cvDocumentId) throw new Error('CV Document ID is required');
 
-    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
-    const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-    const lovableApiKey = Deno.env.get('LOVABLE_API_KEY')!;
+    const supabaseUrl = Deno.env.get('SUPABASE_URL');
+    const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+    const lovableApiKey = Deno.env.get('LOVABLE_API_KEY');
+    if (!supabaseUrl || !supabaseKey || !lovableApiKey) throw new Error('Missing environment variables');
+
     const supabase = createClient(supabaseUrl, supabaseKey);
 
     // Vérifier l'utilisateur authentifié (pour RLS)
@@ -39,7 +68,7 @@ serve(async (req) => {
       .from('cv_documents')
       .select('*, cv_templates(structure_data)')
       .eq('id', cvDocumentId)
-      .eq('user_id', user.id) // RLS : restreindre à l'utilisateur
+      .eq('user_id', user.id) // RLS
       .single();
 
     if (cvError || !cvDoc) throw new Error('CV document not found or not owned by user');
@@ -49,7 +78,7 @@ serve(async (req) => {
     const skillSubcategories = templateStructure.element_styles?.skill_subcategories?.map((sc: any) => sc.name) || ['Langage/BDD', 'OS', 'Outils', 'Méthodologies'];
     const hasCommercialContact = templateStructure.element_styles?.commercial_contact?.position === 'header';
 
-    // Insertion dans processing_logs (commenté car table n'existe pas)
+    // Insertion dans processing_logs (commenté)
     // await supabase.from('processing_logs').insert({
     //   cv_document_id: cvDocumentId,
     //   step: 'extraction',
@@ -67,7 +96,7 @@ serve(async (req) => {
     if (cvFileError || !cvFileData) throw new Error('Failed to download CV file');
 
     let extractedText = '';
-    let structuredData: any[] = [];
+    let structuredData: StructuredData[] = [];
     const fileType = cvDoc.original_file_type;
 
     try {
@@ -84,7 +113,7 @@ serve(async (req) => {
         let currentSubcategory = '';
         let skillItems: string[] = [];
         let currentSection = '';
-        let currentMission: any = null;
+        let currentMission: StructuredData | null = null;
 
         paragraphs.forEach((p: any) => {
           const text = p.textContent.trim().replace(/^[•\-\*É°\u2022\u25CF]\s*/g, '');
@@ -94,7 +123,7 @@ serve(async (req) => {
           const underlineMatch = styleAttr.match(/text-decoration: underline/);
           const underlineColorMatch = styleAttr.match(/text-decoration-color: (#\w+)/);
           const tabMatch = text.match(/\t/);
-          const style = {
+          const style: Style = {
             font: styleAttr.match(/font-family:([^;]+)/)?.[1]?.trim() || 'Segoe UI Symbol',
             size: styleAttr.match(/font-size:([^;]+)/)?.[1]?.trim() || '11pt',
             color: styleAttr.match(/color:(#[0-9a-fA-F]{6})/)?.[1] || '#000000',
@@ -195,15 +224,17 @@ serve(async (req) => {
           });
         }
 
-        extractedText = structuredData.map((p: any) => p.text).join('\n');
+        extractedText = structuredData.map((p: StructuredData) => p.text).join('\n');
       } else if (fileType === 'pdf') {
-        const data = await parsePdf(arrayBuffer);
-        extractedText = data.text.replace(/^[•\-\*É°\u2022\u25CF]\s*/gm, '').replace(/\s+/g, ' ').trim();
-        structuredData = extractedText.split('\n').map(line => ({
-          text: line.trim(),
-          style: { font: 'Unknown', size: 'Unknown', color: '#000000', bold: false, italic: false, underline: null, bullet: false, indent: '0pt', alignment: 'left', spacingBefore: '0pt', spacingAfter: '0pt', lineHeight: '1.15' },
-          section: 'unknown'
-        }));
+        // pdf-parse non supporté dans Deno, commenter temporairement
+        // const data = await parsePdf(arrayBuffer);
+        // extractedText = data.text.replace(/^[•\-\*É°\u2022\u25CF]\s*/gm, '').replace(/\s+/g, ' ').trim();
+        // structuredData = extractedText.split('\n').map(line => ({
+        //   text: line.trim(),
+        //   style: { font: 'Unknown', size: 'Unknown', color: '#000000', bold: false, italic: false, underline: null, bullet: false, indent: '0pt', alignment: 'left', spacingBefore: '0pt', spacingAfter: '0pt', lineHeight: '1.15' },
+        //   section: 'unknown'
+        // }));
+        throw new Error('PDF processing temporarily disabled due to library incompatibility');
       } else {
         throw new Error(`Unsupported file type: ${fileType}`);
       }
@@ -265,38 +296,29 @@ Retourne un JSON avec cette structure :
     }
   },
   "personal": {
-    "years_experience": nombre_années
+    "years_experience": number
   },
   "skills": {
-    "subcategories": [
-      {
-        "name": "nom de la sous-catégorie",
-        "items": ["compétence1, compétence2"]
-      }
-    ],
-    "languages": ["langue1: niveau"],
-    "certifications": ["cert1"]
+    "subcategories": Array<{ name: string; items: string[] }>,
+    "languages": string[],
+    "certifications": string[]
   },
-  "education": [
-    {
-      "degree": "diplôme",
-      "institution": "établissement",
-      "year": "année",
-      "location": "lieu"
-    }
-  ],
-  "missions": [
-    {
-      "client": "nom client",
-      "date_start": "MM/YYYY",
-      "date_end": "MM/YYYY ou 'Actuellement'",
-      "role": "poste occupé",
-      "location": "lieu",
-      "context": "contexte",
-      "achievements": ["réalisation1"],
-      "environment": ["tech1"]
-    }
-  ]
+  "education": Array<{
+    "degree": string,
+    "institution": string,
+    "year": string,
+    "location": string
+  }>,
+  "missions": Array<{
+    "client": string,
+    "date_start": string,
+    "date_end": string,
+    "role": string,
+    "location": string,
+    "context": string,
+    "achievements": string[],
+    "environment": string[]
+  }>
 }`;
 
     const aiResponse = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
@@ -325,7 +347,7 @@ Retourne un JSON avec cette structure :
     const content = aiData.choices?.[0]?.message?.content;
     if (!content) throw new Error('No content in AI response');
 
-    let extractedData;
+    let extractedData: any;
     try {
       const jsonMatch = content.match(/```json\s*([\s\S]*?)\s*```/) || content.match(/\{[\s\S]*\}/);
       const jsonStr = jsonMatch ? (jsonMatch[1] || jsonMatch[0]) : content;
@@ -341,7 +363,7 @@ Retourne un JSON avec cette structure :
     };
     console.log('ExtractedData:', JSON.stringify(extractedData, null, 2));
 
-    // Insertion dans processing_logs (commenté car table n'existe pas)
+    // Insertion dans processing_logs (commenté)
     // await supabase.from('processing_logs').insert({
     //   cv_document_id: cvDocumentId,
     //   step: 'extraction',
@@ -359,7 +381,7 @@ Retourne un JSON avec cette structure :
         processing_time_ms: processingTime
       })
       .eq('id', cvDocumentId)
-      .eq('user_id', user.id); // RLS
+      .eq('user_id', user.id);
 
     return new Response(
       JSON.stringify({ 
@@ -373,7 +395,7 @@ Retourne un JSON avec cette structure :
 
   } catch (error) {
     console.error('Error in process-cv function:', error);
-    const { cvDocumentId } = await req.json().catch(() => ({}));
+    const { cvDocumentId } = await req.json().catch(() => ({})) as { cvDocumentId?: string };
     if (cvDocumentId) {
       const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
       const { data: { user } } = await supabase.auth.getUser();
@@ -391,7 +413,7 @@ Retourne un JSON avec cette structure :
           error_message: error instanceof Error ? error.message : 'Unknown error'
         })
         .eq('id', cvDocumentId)
-        .eq('user_id', user?.id || null); // RLS
+        .eq('user_id', user?.id || null);
     }
     return new Response(
       JSON.stringify({ error: error instanceof Error ? error.message : 'Unknown error' }),
