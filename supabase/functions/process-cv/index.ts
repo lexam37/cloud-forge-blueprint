@@ -1,11 +1,8 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { convert } from "https://deno.land/x/deno_mammoth@v0.1.0/mod.ts"; // Remplacement de mammoth
-import { DOMParser } from "https://deno.land/std@0.168.0/dom/mod.ts"; // Import DOMParser
+import { convert } from "https://deno.land/x/deno_mammoth@v0.1.0/mod.ts";
+import { DOMParser } from "https://deno.land/std@0.168.0/dom/mod.ts";
 import { z } from "https://deno.land/x/zod@v3.21.4/mod.ts";
-
-const schema = z.object({ cvDocumentId: z.string().uuid() });
-const { cvDocumentId } = schema.parse(await req.json());
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -45,15 +42,18 @@ const sectionKeywords: Record<string, string[]> = {
   'Formations & Certifications': ['formation', 'formations', 'certification', 'certifications', 'diplôme', 'diplome', 'education', 'études', 'etudes', 'study', 'studies']
 };
 
+const requestSchema = z.object({
+  cvDocumentId: z.string().uuid({ message: 'cvDocumentId must be a valid UUID' })
+});
+
 serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
   }
 
   try {
-    const { cvDocumentId } = await req.json() as { cvDocumentId: string };
-    if (!cvDocumentId) throw new Error('CV Document ID is required');
-
+    const { cvDocumentId } = requestSchema.parse(await req.json());
+    
     const supabaseUrl = Deno.env.get('SUPABASE_URL');
     const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
     const lovableApiKey = Deno.env.get('LOVABLE_API_KEY');
@@ -229,7 +229,6 @@ serve(async (req: Request) => {
 
         extractedText = structuredData.map((p: StructuredData) => p.text).join('\n');
       } else if (fileType === 'pdf') {
-        // pdf-parse non supporté dans Deno, commenter temporairement
         throw new Error('PDF processing temporarily disabled due to library incompatibility');
       } else {
         throw new Error(`Unsupported file type: ${fileType}`);
@@ -334,12 +333,11 @@ Retourne un JSON avec cette structure :
     });
 
     if (!aiResponse.ok) {
-      console.error('AI Response Status:', aiResponse.status, await aiResponse.text());
+      console.error('AI Response Status:', aiResponse.status);
       throw new Error('AI extraction failed');
     }
 
     const aiData = await aiResponse.json();
-    console.log('AI Response:', JSON.stringify(aiData, null, 2));
     const content = aiData.choices?.[0]?.message?.content;
     if (!content) throw new Error('No content in AI response');
 
@@ -357,7 +355,6 @@ Retourne un JSON avec cette structure :
       text: hasCommercialContact ? 'Contact Commercial' : '',
       enabled: hasCommercialContact
     };
-    console.log('ExtractedData:', JSON.stringify(extractedData, null, 2));
 
     await supabase.from('processing_logs').insert({
       cv_document_id: cvDocumentId,
@@ -390,7 +387,7 @@ Retourne un JSON avec cette structure :
 
   } catch (error) {
     console.error('Error in process-cv function:', error);
-    const { cvDocumentId } = await req.json().catch(() => ({})) as { cvDocumentId?: string };
+    const { cvDocumentId } = requestSchema.parse(await req.json().catch(() => ({})));
     if (cvDocumentId) {
       const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
       const { data: { user } } = await supabase.auth.getUser();
