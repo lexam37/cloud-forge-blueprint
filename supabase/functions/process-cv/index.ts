@@ -1,4 +1,3 @@
-
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { convert } from "https://esm.sh/mammoth@1.6.0";
@@ -7,6 +6,12 @@ import { parse as parsePdf } from "https://esm.sh/pdf-parse@1.1.1";
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+};
+
+const sectionKeywords = {
+  'Compétences': ['compétence', 'competence', 'skills', 'compétences', 'savoir-faire'],
+  'Expérience': ['expérience', 'experience', 'expériences', 'work history', 'professional experience'],
+  'Formations & Certifications': ['formation', 'formations', 'certification', 'certifications', 'diplôme', 'diplome', 'education', 'études', 'etudes', 'study', 'studies']
 };
 
 serve(async (req) => {
@@ -23,29 +28,36 @@ serve(async (req) => {
     const lovableApiKey = Deno.env.get('LOVABLE_API_KEY')!;
     const supabase = createClient(supabaseUrl, supabaseKey);
 
+    // Vérifier l'utilisateur authentifié
+    const { data: { user }, error: authError } = await supabase.auth.getUser();
+    if (authError || !user) throw new Error('User not authenticated');
+
     const startTime = Date.now();
-    console.log('Processing CV:', cvDocumentId);
+    console.log('Processing CV:', cvDocumentId, 'for user:', user.id);
 
     const { data: cvDoc, error: cvError } = await supabase
       .from('cv_documents')
       .select('*, cv_templates(structure_data)')
       .eq('id', cvDocumentId)
+      .eq('user_id', user.id) // Restreindre à l'utilisateur
       .single();
 
-    if (cvError || !cvDoc) throw new Error('CV document not found');
+    if (cvError || !cvDoc) throw new Error('CV document not found or not owned by user');
 
     const templateStructure = cvDoc.cv_templates?.structure_data || {};
     const sectionNames = templateStructure.sections?.map((s: any) => s.name) || ['Compétences', 'Expérience', 'Formations & Certifications'];
     const skillSubcategories = templateStructure.element_styles?.skill_subcategories?.map((sc: any) => sc.name) || ['Langage/BDD', 'OS', 'Outils', 'Méthodologies'];
     const hasCommercialContact = templateStructure.element_styles?.commercial_contact?.position === 'header';
 
-    await supabase.from('processing_logs').insert({
-      cv_document_id: cvDocumentId,
-      step: 'extraction',
-      message: 'Starting CV data extraction',
-    });
+    // Commenté car processing_logs n'existe pas encore
+    // await supabase.from('processing_logs').insert({
+    //   cv_document_id: cvDocumentId,
+    //   step: 'extraction',
+    //   message: 'Starting CV data extraction',
+    //   user_id: user.id
+    // });
 
-    await supabase.from('cv_documents').update({ status: 'analyzing' }).eq('id', cvDocumentId);
+    await supabase.from('cv_documents').update({ status: 'analyzing' }).eq('id', cvDocumentId).eq('user_id', user.id);
 
     const { data: cvFileData, error: cvFileError } = await supabase
       .storage
@@ -286,7 +298,7 @@ Retourne un JSON avec cette structure :
     }
   ]
 }`;
- 
+
     const aiResponse = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -329,12 +341,14 @@ Retourne un JSON avec cette structure :
     };
     console.log('ExtractedData:', JSON.stringify(extractedData, null, 2));
 
-    await supabase.from('processing_logs').insert({
-      cv_document_id: cvDocumentId,
-      step: 'extraction',
-      message: 'CV data extracted successfully',
-      details: { processing_time_ms: Date.now() - startTime }
-    });
+    // Commenté car processing_logs n'existe pas encore
+    // await supabase.from('processing_logs').insert({
+    //   cv_document_id: cvDocumentId,
+    //   step: 'extraction',
+    //   message: 'CV data extracted successfully',
+    //   details: { processing_time_ms: Date.now() - startTime },
+    //   user_id: user.id
+    // });
 
     const processingTime = Date.now() - startTime;
     await supabase
@@ -344,7 +358,8 @@ Retourne un JSON avec cette structure :
         status: 'processed',
         processing_time_ms: processingTime
       })
-      .eq('id', cvDocumentId);
+      .eq('id', cvDocumentId)
+      .eq('user_id', user.id);
 
     return new Response(
       JSON.stringify({ 
@@ -361,18 +376,22 @@ Retourne un JSON avec cette structure :
     const { cvDocumentId } = await req.json().catch(() => ({}));
     if (cvDocumentId) {
       const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
-      await supabase.from('processing_logs').insert({
-        cv_document_id: cvDocumentId,
-        step: 'error',
-        message: error instanceof Error ? error.message : 'Unknown error',
-      });
+      const { data: { user } } = await supabase.auth.getUser();
+      // Commenté car processing_logs n'existe pas encore
+      // await supabase.from('processing_logs').insert({
+      //   cv_document_id: cvDocumentId,
+      //   step: 'error',
+      //   message: error instanceof Error ? error.message : 'Unknown error',
+      //   user_id: user?.id || null
+      // });
       await supabase
         .from('cv_documents')
         .update({ 
           status: 'error',
           error_message: error instanceof Error ? error.message : 'Unknown error'
         })
-        .eq('id', cvDocumentId);
+        .eq('id', cvDocumentId)
+        .eq('user_id', user?.id || null);
     }
     return new Response(
       JSON.stringify({ error: error instanceof Error ? error.message : 'Unknown error' }),
