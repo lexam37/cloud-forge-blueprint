@@ -12,6 +12,7 @@ import AuthComponent from "./components/Auth";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { CVHistoryList } from './components/dashboard/CVHistoryList';
 import { TemplateManagement } from './components/dashboard/TemplateManagement';
+import { FileUploadSection } from './components/dashboard/FileUploadSection';
 
 const queryClient = new QueryClient();
 
@@ -48,12 +49,16 @@ const App = () => {
                     <TabsList>
                       <TabsTrigger value="historique">Historique</TabsTrigger>
                       <TabsTrigger value="templates">Templates</TabsTrigger>
+                      <TabsTrigger value="cvupload">CV Upload</TabsTrigger>
                     </TabsList>
                     <TabsContent value="historique">
                       <CVHistoryList />
                     </TabsContent>
                     <TabsContent value="templates">
                       <TemplateManagement />
+                    </TabsContent>
+                    <TabsContent value="cvupload">
+                      <FileUploadSection />
                     </TabsContent>
                   </Tabs>
                 ) : (
