@@ -96,13 +96,12 @@ serve(async (req: Request) => {
 
     const structureData = await analyzeDocxTemplate(arrayBuffer, templateId, supabase, user.id);
 
-    // Insertion dans processing_logs (commenté)
-    // await supabase.from('processing_logs').insert({
-    //   cv_document_id: null,
-    //   step: 'template_analysis',
-    //   message: 'Template analyzed successfully',
-    //   user_id: user.id
-    // });
+    await supabase.from('processing_logs').insert({
+      cv_document_id: null,
+      step: 'template_analysis',
+      message: 'Template analyzed successfully',
+      user_id: user.id
+    });
 
     return new Response(
       JSON.stringify({ success: true, templateId, structureData, message: 'Template analyzed successfully' }),
@@ -111,14 +110,14 @@ serve(async (req: Request) => {
 
   } catch (error) {
     console.error('Error in analyze-template:', error);
-    // Insertion dans processing_logs (commenté)
-    // const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
-    // await supabase.from('processing_logs').insert({
-    //   cv_document_id: null,
-    //   step: 'error',
-    //   message: error instanceof Error ? error.message : 'Unknown error',
-    //   user_id: user?.id || null
-    // });
+    const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
+    const { data: { user } } = await supabase.auth.getUser();
+    await supabase.from('processing_logs').insert({
+      cv_document_id: null,
+      step: 'error',
+      message: error instanceof Error ? error.message : 'Unknown error',
+      user_id: user?.id || null
+    });
     return new Response(
       JSON.stringify({ error: error instanceof Error ? error.message : 'Unknown error' }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 500 }
