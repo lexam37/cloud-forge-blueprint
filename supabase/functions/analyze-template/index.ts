@@ -1,20 +1,51 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.75.0";
-import { convert } from "https://esm.sh/mammoth@1.6.0";
+import { convert } from "https://deno.land/x/deno_mammoth@v0.1.0/mod.ts"; // Remplacement de mammoth
+import { DOMParser } from "https://deno.land/std@0.168.0/dom/mod.ts"; // Import DOMParser
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-serve(async (req) => {
+interface Style {
+  font: string;
+  size: string;
+  color: string;
+  bold: boolean;
+  italic: boolean;
+  underline: { type: string; color: string } | null;
+  case: string;
+  bullet: boolean;
+  alignment: string;
+  spacingBefore: string;
+  spacingAfter: string;
+  lineHeight: string;
+  indent: string;
+}
+
+interface Section {
+  name: string;
+  position: string;
+  title_style: Style;
+  spacing: { top: string; bottom: string };
+  paragraph: { alignment: string };
+}
+
+const sectionKeywords: Record<string, string[]> = {
+  'Compétences': ['compétence', 'competence', 'skills', 'compétences', 'savoir-faire'],
+  'Expérience': ['expérience', 'experience', 'expériences', 'work history', 'professional experience'],
+  'Formations & Certifications': ['formation', 'formations', 'certification', 'certifications', 'diplôme', 'diplome', 'education', 'études', 'etudes', 'study', 'studies']
+};
+
+serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
   }
 
   try {
     console.log('Received request at', new Date().toISOString());
-    const { templateId } = await req.json();
+    const { templateId } = await req.json() as { templateId: string };
     console.log('Processing templateId:', templateId);
 
     if (!templateId) {
@@ -41,7 +72,7 @@ serve(async (req) => {
       .from('cv_templates')
       .select('template_file_path')
       .eq('id', templateId)
-      .eq('user_id', user.id) // RLS : restreindre à l'utilisateur
+      .eq('user_id', user.id) // RLS
       .single();
 
     if (templateError || !template) {
@@ -65,7 +96,7 @@ serve(async (req) => {
 
     const structureData = await analyzeDocxTemplate(arrayBuffer, templateId, supabase, user.id);
 
-    // Insertion dans processing_logs (commenté car table n'existe pas)
+    // Insertion dans processing_logs (commenté)
     // await supabase.from('processing_logs').insert({
     //   cv_document_id: null,
     //   step: 'template_analysis',
@@ -94,37 +125,6 @@ serve(async (req) => {
     );
   }
 });
-
-// Constantes et fonctions nécessaires
-const sectionKeywords = {
-  'Compétences': ['compétence', 'competence', 'skills', 'compétences', 'savoir-faire'],
-  'Expérience': ['expérience', 'experience', 'expériences', 'work history', 'professional experience'],
-  'Formations & Certifications': ['formation', 'formations', 'certification', 'certifications', 'diplôme', 'diplome', 'education', 'études', 'etudes', 'study', 'studies']
-};
-
-interface Style {
-  font: string;
-  size: string;
-  color: string;
-  bold: boolean;
-  italic: boolean;
-  underline: { type: string; color: string } | null;
-  case: string;
-  bullet: boolean;
-  alignment: string;
-  spacingBefore: string;
-  spacingAfter: string;
-  lineHeight: string;
-  indent: string;
-}
-
-interface Section {
-  name: string;
-  position: string;
-  title_style: Style;
-  spacing: { top: string; bottom: string };
-  paragraph: { alignment: string };
-}
 
 function extractStyle(p: any, text: string): Style {
   const styleAttr = p.getAttribute('style') || '';
@@ -322,7 +322,7 @@ async function analyzeDocxTemplate(arrayBuffer: ArrayBuffer, templateId: string,
     .from('cv_templates')
     .update({ structure_data: structureData })
     .eq('id', templateId)
-    .eq('user_id', userId); // RLS : restreindre à l'utilisateur
+    .eq('user_id', userId); // RLS
 
   if (updateError) {
     console.error('Failed to update cv_templates:', updateError);
