@@ -1,7 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { convert } from "https://deno.land/x/deno_mammoth@v0.1.0/mod.ts"; // Remplacement de mammoth
-import { DOMParser } from "https://deno.land/std@0.168.0/dom/mod.ts"; // Import DOMParser pour Deno
+import { DOMParser } from "https://deno.land/std@0.168.0/dom/mod.ts"; // Import DOMParser
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -78,13 +78,12 @@ serve(async (req: Request) => {
     const skillSubcategories = templateStructure.element_styles?.skill_subcategories?.map((sc: any) => sc.name) || ['Langage/BDD', 'OS', 'Outils', 'Méthodologies'];
     const hasCommercialContact = templateStructure.element_styles?.commercial_contact?.position === 'header';
 
-    // Insertion dans processing_logs (commenté)
-    // await supabase.from('processing_logs').insert({
-    //   cv_document_id: cvDocumentId,
-    //   step: 'extraction',
-    //   message: 'Starting CV data extraction',
-    //   user_id: user.id
-    // });
+    await supabase.from('processing_logs').insert({
+      cv_document_id: cvDocumentId,
+      step: 'extraction',
+      message: 'Starting CV data extraction',
+      user_id: user.id
+    });
 
     await supabase.from('cv_documents').update({ status: 'analyzing' }).eq('id', cvDocumentId).eq('user_id', user.id);
 
@@ -227,13 +226,6 @@ serve(async (req: Request) => {
         extractedText = structuredData.map((p: StructuredData) => p.text).join('\n');
       } else if (fileType === 'pdf') {
         // pdf-parse non supporté dans Deno, commenter temporairement
-        // const data = await parsePdf(arrayBuffer);
-        // extractedText = data.text.replace(/^[•\-\*É°\u2022\u25CF]\s*/gm, '').replace(/\s+/g, ' ').trim();
-        // structuredData = extractedText.split('\n').map(line => ({
-        //   text: line.trim(),
-        //   style: { font: 'Unknown', size: 'Unknown', color: '#000000', bold: false, italic: false, underline: null, bullet: false, indent: '0pt', alignment: 'left', spacingBefore: '0pt', spacingAfter: '0pt', lineHeight: '1.15' },
-        //   section: 'unknown'
-        // }));
         throw new Error('PDF processing temporarily disabled due to library incompatibility');
       } else {
         throw new Error(`Unsupported file type: ${fileType}`);
@@ -363,14 +355,13 @@ Retourne un JSON avec cette structure :
     };
     console.log('ExtractedData:', JSON.stringify(extractedData, null, 2));
 
-    // Insertion dans processing_logs (commenté)
-    // await supabase.from('processing_logs').insert({
-    //   cv_document_id: cvDocumentId,
-    //   step: 'extraction',
-    //   message: 'CV data extracted successfully',
-    //   details: { processing_time_ms: Date.now() - startTime },
-    //   user_id: user.id
-    // });
+    await supabase.from('processing_logs').insert({
+      cv_document_id: cvDocumentId,
+      step: 'extraction',
+      message: 'CV data extracted successfully',
+      details: { processing_time_ms: Date.now() - startTime },
+      user_id: user.id
+    });
 
     const processingTime = Date.now() - startTime;
     await supabase
@@ -399,13 +390,12 @@ Retourne un JSON avec cette structure :
     if (cvDocumentId) {
       const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
       const { data: { user } } = await supabase.auth.getUser();
-      // Insertion dans processing_logs (commenté)
-      // await supabase.from('processing_logs').insert({
-      //   cv_document_id: cvDocumentId,
-      //   step: 'error',
-      //   message: error instanceof Error ? error.message : 'Unknown error',
-      //   user_id: user?.id || null
-      // });
+      await supabase.from('processing_logs').insert({
+        cv_document_id: cvDocumentId,
+        step: 'error',
+        message: error instanceof Error ? error.message : 'Unknown error',
+        user_id: user?.id || null
+      });
       await supabase
         .from('cv_documents')
         .update({ 
