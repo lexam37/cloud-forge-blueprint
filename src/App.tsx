@@ -47,18 +47,18 @@ const App = () => {
                 session ? (
                   <Tabs defaultValue="historique">
                     <TabsList>
+                      <TabsTrigger value="cvupload">CV Upload</TabsTrigger>
                       <TabsTrigger value="historique">Historique</TabsTrigger>
                       <TabsTrigger value="templates">Templates</TabsTrigger>
-                      <TabsTrigger value="cvupload">CV Upload</TabsTrigger>
                     </TabsList>
+                    <TabsContent value="cvupload">
+                      <FileUploadSection />
+                    </TabsContent>
                     <TabsContent value="historique">
                       <CVHistoryList />
                     </TabsContent>
                     <TabsContent value="templates">
                       <TemplateManagement />
-                    </TabsContent>
-                    <TabsContent value="cvupload">
-                      <FileUploadSection />
                     </TabsContent>
                   </Tabs>
                 ) : (
