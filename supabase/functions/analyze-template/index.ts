@@ -32,16 +32,16 @@ serve(async (req) => {
     console.log('Creating Supabase client with URL:', supabaseUrl.substring(0, 20) + '...');
     const supabase = createClient(supabaseUrl, supabaseKey);
 
-    // Vérifier l'utilisateur authentifié
+    // Vérifier l'utilisateur authentifié (pour RLS)
     const { data: { user }, error: authError } = await supabase.auth.getUser();
     if (authError || !user) throw new Error('User not authenticated');
 
-    console.log('Fetching template from cv_templates...');
+    console.log('Fetching template from cv_templates for user:', user.id);
     const { data: template, error: templateError } = await supabase
       .from('cv_templates')
       .select('template_file_path')
       .eq('id', templateId)
-      .eq('user_id', user.id) // Restreindre à l'utilisateur
+      .eq('user_id', user.id) // RLS : restreindre à l'utilisateur
       .single();
 
     if (templateError || !template) {
@@ -65,6 +65,14 @@ serve(async (req) => {
 
     const structureData = await analyzeDocxTemplate(arrayBuffer, templateId, supabase, user.id);
 
+    // Insertion dans processing_logs (commenté car table n'existe pas)
+    // await supabase.from('processing_logs').insert({
+    //   cv_document_id: null,
+    //   step: 'template_analysis',
+    //   message: 'Template analyzed successfully',
+    //   user_id: user.id
+    // });
+
     return new Response(
       JSON.stringify({ success: true, templateId, structureData, message: 'Template analyzed successfully' }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 }
@@ -72,6 +80,14 @@ serve(async (req) => {
 
   } catch (error) {
     console.error('Error in analyze-template:', error);
+    // Insertion dans processing_logs (commenté)
+    // const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
+    // await supabase.from('processing_logs').insert({
+    //   cv_document_id: null,
+    //   step: 'error',
+    //   message: error instanceof Error ? error.message : 'Unknown error',
+    //   user_id: user?.id || null
+    // });
     return new Response(
       JSON.stringify({ error: error instanceof Error ? error.message : 'Unknown error' }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 500 }
@@ -306,7 +322,7 @@ async function analyzeDocxTemplate(arrayBuffer: ArrayBuffer, templateId: string,
     .from('cv_templates')
     .update({ structure_data: structureData })
     .eq('id', templateId)
-    .eq('user_id', userId); // Restreindre à l'utilisateur
+    .eq('user_id', userId); // RLS : restreindre à l'utilisateur
 
   if (updateError) {
     console.error('Failed to update cv_templates:', updateError);
