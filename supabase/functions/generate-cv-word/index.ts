@@ -6,21 +6,21 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-serve(async (req) => {
+serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
   }
 
   try {
     console.log('Starting generate-cv-word for request:', await req.json());
-    const { cvDocumentId } = await req.json();
+    const { cvDocumentId } = await req.json() as { cvDocumentId: string };
     
     if (!cvDocumentId) {
       throw new Error('cvDocumentId is required');
     }
 
-    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
-    const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+    const supabaseUrl = Deno.env.get('SUPABASE_URL');
+    const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
     
     if (!supabaseUrl || !supabaseKey) {
       throw new Error('SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY missing');
@@ -37,7 +37,7 @@ serve(async (req) => {
       .from('cv_documents')
       .select('*')
       .eq('id', cvDocumentId)
-      .eq('user_id', user.id) // RLS : restreindre à l'utilisateur
+      .eq('user_id', user.id) // RLS
       .single();
 
     if (cvError || !cvDoc) {
@@ -60,7 +60,7 @@ serve(async (req) => {
       .upload(filePath, blob, {
         contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
         upsert: true,
-        metadata: { user_id: user.id } // Ajouter user_id pour futur RLS Storage
+        metadata: { user_id: user.id } // Pour futur RLS Storage
       });
 
     if (uploadError) {
@@ -68,7 +68,7 @@ serve(async (req) => {
       throw uploadError;
     }
 
-    // Insertion dans processing_logs (commenté car table n'existe pas)
+    // Insertion dans processing_logs (commenté)
     // await supabase.from('processing_logs').insert({
     //   cv_document_id: cvDocumentId,
     //   step: 'generation',
