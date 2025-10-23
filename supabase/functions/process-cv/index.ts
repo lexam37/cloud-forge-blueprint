@@ -221,7 +221,7 @@ serve(async (req: Request) => {
         if (skillItems.length > 0) {
           structuredData.push({
             text: `${currentSubcategory}: ${skillItems.join(', ')}`,
-            style: { bold: false, bullet: false },
+            style: { ...style, bold: false, bullet: false },
             section: 'Compétences',
             subcategory: currentSubcategory
           });
