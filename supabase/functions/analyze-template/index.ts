@@ -1,8 +1,18 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.75.0";
 import { convert } from "https://deno.land/x/deno_mammoth@v0.1.0/mod.ts";
-import { DOMParser } from "https://deno.land/std@0.168.0/dom/mod.ts";
+import mammoth from "https://esm.sh/mammoth@1.6.0";
+import { DOMParser } from "https://deno.land/x/deno_dom@v0.1.43/deno-dom-wasm.ts";
 import { z } from "https://deno.land/x/zod@v3.21.4/mod.ts";
+
+
+
+
+// Usage changes to:
+const result = await mammoth.convertToHtml({ arrayBuffer });
+const parser = new DOMParser();
+const doc = parser.parseFromString(result.value, 'text/html');
+
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -191,8 +201,8 @@ function extractSectionsAndSubcategories(
 
   if (!sectionDetected && newCurrentSection) {
     if (newCurrentSection === 'Compétences') {
-      const textParts = text.split(/[\t:]/).map(t => t.trim());
-      if (textParts[0].match(/[A-Z][a-z]+\/[A-Z][a-z]+/) || skillSubcategories.some(sc => textLower.includes(sc.toLowerCase()))) {
+      const textParts = text.split(/[\t:]/).map((t: string) => t.trim());
+      if (textParts[0].match(/[A-Z][a-z]+\/[A-Z][a-z]+/) || skillSubcategories.some((sc :string) => textLower.includes(sc.toLowerCase()))) {
         styles.skill_subcategories.push({
           name: textParts[0],
           style: { ...style, bold: false, color: '#329696', font: 'Segoe UI Symbol', size: '11pt' },
