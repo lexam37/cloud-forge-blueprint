@@ -161,24 +161,25 @@ async function generateCVWithAIXML(
   console.log('[generateCV] Template loaded, XML length:', documentXml.length);
 
   // 1. Remplacer le trigramme (3 lettres majuscules entre balises <w:t>)
+  const trigram = cvData.header?.trigram || cvData.trigram || 'XXX';
   const trigramPattern = /<w:t>([A-Z]{3})<\/w:t>/g;
-  const trigramReplacement = `<w:t>${cvData.trigram || 'XXX'}</w:t>`;
+  const trigramReplacement = `<w:t>${trigram}</w:t>`;
   documentXml = documentXml.replace(trigramPattern, trigramReplacement);
-  console.log('[generateCV] Trigram replaced');
+  console.log('[generateCV] Trigram replaced:', trigram);
 
   // 2. Remplacer le titre professionnel
-  // Chercher un pattern typique de titre (en gras, grande taille)
+  const title = cvData.header?.title || cvData.title || 'Titre Professionnel';
   const titlePattern = /<w:t>([^<>]{10,100})<\/w:t>/g;
   let titleReplaced = false;
   documentXml = documentXml.replace(titlePattern, (match, content) => {
     // Ne remplacer que le premier titre long qui n'est pas le trigramme
     if (!titleReplaced && content.length > 10 && !/^[A-Z]{3}$/.test(content)) {
       titleReplaced = true;
-      return `<w:t>${cvData.title || 'Titre Professionnel'}</w:t>`;
+      return `<w:t>${title}</w:t>`;
     }
     return match;
   });
-  console.log('[generateCV] Title replaced');
+  console.log('[generateCV] Title replaced:', title);
 
   // 3. Traiter les sections dynamiques (compétences, missions, formations)
   if (templateStructure && templateStructure.sections) {
@@ -186,40 +187,59 @@ async function generateCVWithAIXML(
       console.log('[generateCV] Processing section:', section.name, `(${section.title})`);
       
       if (section.type === 'list' && section.name === 'Compétences') {
+        // Extraire toutes les compétences du CV (skills.subcategories[].items)
+        const competences: string[] = [];
+        if (cvData.skills?.subcategories) {
+          for (const subcategory of cvData.skills.subcategories) {
+            if (subcategory.items) {
+              competences.push(...subcategory.items);
+            }
+          }
+        }
+        console.log('[generateCV] Found competences:', competences.length);
+        
         // Remplacer les compétences
         documentXml = replaceSectionContent(
           documentXml, 
           section.title,
-          cvData.competences || [],
+          competences,
           'competence'
         );
       }
       
       if (section.type === 'list' && section.name === 'Expérience') {
+        // Transformer les missions du CV
+        const missions = (cvData.missions || []).map((m: any) => ({
+          title: m.role || m.title || '',
+          client: m.client || '',
+          period: `${m.date_start || ''} - ${m.date_end || ''}`,
+          description: m.context || m.description || ''
+        }));
+        console.log('[generateCV] Found missions:', missions.length);
+        
         // Remplacer les missions
         documentXml = replaceSectionContent(
           documentXml,
           section.title,
-          (cvData.missions || []).map((m: any) => ({
-            title: m.title,
-            client: m.client,
-            period: m.period,
-            description: m.description
-          })),
+          missions,
           'mission'
         );
       }
       
       if (section.type === 'list' && section.name === 'Formations') {
+        // Transformer les formations du CV (education)
+        const formations = (cvData.education || []).map((f: any) => ({
+          title: f.degree || f.title || '',
+          institution: f.institution || '',
+          year: f.year || ''
+        }));
+        console.log('[generateCV] Found formations:', formations.length);
+        
         // Remplacer les formations
         documentXml = replaceSectionContent(
           documentXml,
           section.title,
-          (cvData.formations || []).map((f: any) => ({
-            title: f.title,
-            institution: f.institution,
-            year: f.year
-          })),
+          formations,
           'formation'
         );
       }
