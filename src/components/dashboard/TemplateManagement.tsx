@@ -302,6 +302,18 @@ export const TemplateManagement = () => {
         return;
       }
 
+      // D'abord, mettre à null le template_id dans les CV qui référencent ce template
+      const { error: updateError } = await supabase
+        .from('cv_documents')
+        .update({ template_id: null })
+        .eq('template_id', templateId)
+        .eq('user_id', user.id);
+
+      if (updateError) {
+        console.error('Error updating CV documents:', updateError);
+        throw new Error("Impossible de dissocier les CV de ce template");
+      }
+
       // Supprimer du storage
       const { error: storageError } = await supabase.storage
         .from('cv-templates')
@@ -329,7 +341,7 @@ export const TemplateManagement = () => {
       toast({
         variant: "destructive",
         title: "Erreur",
-        description: "Impossible de supprimer le template",
+        description: error instanceof Error ? error.message : "Impossible de supprimer le template",
       });
     } finally {
       setDeletingId(null);
