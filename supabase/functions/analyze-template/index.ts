@@ -585,7 +585,7 @@ async function analyzeTemplateStructure(fileData: Blob, templateId: string, supa
 
 /**
  * Crée un template avec des placeholders docxtemplater en remplaçant tout le contenu exemple
- * Approche robuste : cherche les sections par leur titre dans le XML
+ * Utilise directement les sections détectées par analyzeTemplateStructure
  */
 async function createTemplateWithPlaceholders(
   zipContent: any,
@@ -593,6 +593,7 @@ async function createTemplateWithPlaceholders(
   extractedContent: Array<{ text: string; style: DetailedStyle }>
 ): Promise<Uint8Array> {
   console.log('[createTemplateWithPlaceholders] Creating template with placeholders...');
+  console.log('[createTemplateWithPlaceholders] Sections detected:', sections.map(s => `${s.name} (${s.startIndex} to ${s.endIndex})`).join(', '));
   
   const documentXml = await zipContent.file('word/document.xml')?.async('string');
   if (!documentXml) {
@@ -604,64 +605,60 @@ async function createTemplateWithPlaceholders(
 
   let modifiedXml = documentXml;
   
-  // Fonction pour extraire le texte d'un paragraphe
-  const extractText = (para: string): string => {
-    const textMatches = para.match(/<w:t[^>]*>(.*?)<\/w:t>/g);
-    if (!textMatches) return '';
-    return textMatches.map(t => t.replace(/<\/?w:t[^>]*>/g, '')).join('').trim();
-  };
-
-  // Trouver les indices des titres de section dans les paragraphes XML
-  const findSectionInParagraphs = (sectionName: string): number => {
-    const keywords: { [key: string]: string[] } = {
-      'Compétences': ['compétence', 'competence', 'skill'],
-      'Expérience': ['expérience', 'experience', 'mission', 'parcours'],
-      'Formations & Certifications': ['formation', 'certification', 'diplôme', 'diplome', 'éducation', 'education']
-    };
-    
-    const sectionKeywords = keywords[sectionName] || [];
-    
-    for (let i = 0; i < paragraphs.length; i++) {
-      const text = extractText(paragraphs[i]).toLowerCase();
-      if (text.length < 80 && sectionKeywords.some(kw => text.includes(kw))) {
-        console.log(`[createTemplateWithPlaceholders] Found section "${sectionName}" at paragraph ${i}: "${text}"`);
-        return i;
+  // Mapper les extractedContent aux paragraphes XML
+  // On va construire un mapping entre les index d'extractedContent et les paragraphes XML
+  const contentToParagraphMap: Map<number, number> = new Map();
+  let paraIndex = 0;
+  
+  for (let contentIdx = 0; contentIdx < extractedContent.length && paraIndex < paragraphs.length; contentIdx++) {
+    const content = extractedContent[contentIdx];
+    // Trouver le paragraphe correspondant
+    while (paraIndex < paragraphs.length) {
+      const paraText = paragraphs[paraIndex].match(/<w:t[^>]*>(.*?)<\/w:t>/g);
+      if (paraText) {
+        const fullText = paraText.map((t: string) => t.replace(/<\/?w:t[^>]*>/g, '')).join('').trim();
+        // Si le texte correspond (même partiellement), on mappe
+        if (fullText.includes(content.text.substring(0, 30)) || content.text.includes(fullText.substring(0, 30))) {
+          contentToParagraphMap.set(contentIdx, paraIndex);
+          paraIndex++;
+          break;
+        }
       }
+      paraIndex++;
     }
-    return -1;
-  };
+  }
+  
+  console.log(`[createTemplateWithPlaceholders] Mapped ${contentToParagraphMap.size} content items to paragraphs`);
 
-  // Trouver les indices des sections
-  const competencesIdx = findSectionInParagraphs('Compétences');
-  const experienceIdx = findSectionInParagraphs('Expérience');
-  const formationsIdx = findSectionInParagraphs('Formations & Certifications');
-
-  // Trier les indices pour déterminer les plages
-  const sectionIndices = [
-    { name: 'Compétences', idx: competencesIdx },
-    { name: 'Expérience', idx: experienceIdx },
-    { name: 'Formations & Certifications', idx: formationsIdx }
-  ].filter(s => s.idx !== -1).sort((a, b) => a.idx - b.idx);
-
-  console.log('[createTemplateWithPlaceholders] Section order:', sectionIndices.map(s => `${s.name} at ${s.idx}`).join(', '));
-
-  // Pour chaque section, identifier la plage et remplacer
-  sectionIndices.forEach((section, idx) => {
-    const startIdx = section.idx + 1; // Commence après le titre
-    const endIdx = idx < sectionIndices.length - 1 ? sectionIndices[idx + 1].idx : paragraphs.length;
+  // Pour chaque section, remplacer le contenu
+  sections.forEach((section) => {
+    console.log(`[createTemplateWithPlaceholders] Processing section "${section.name}" (content idx ${section.startIndex} to ${section.endIndex})`);
     
-    console.log(`[createTemplateWithPlaceholders] Processing ${section.name} from para ${startIdx} to ${endIdx}`);
+    // Convertir les index de contenu en index de paragraphes
+    const startParaIdx = contentToParagraphMap.get(section.startIndex);
+    const endParaIdx = contentToParagraphMap.get(section.endIndex - 1);
     
-    // Supprimer tous les paragraphes de contenu exemple
-    for (let i = startIdx; i < endIdx; i++) {
+    if (startParaIdx === undefined) {
+      console.warn(`[createTemplateWithPlaceholders] Could not find paragraph for section "${section.name}" start`);
+      return;
+    }
+    
+    const actualEndIdx = endParaIdx !== undefined ? endParaIdx + 1 : paragraphs.length;
+    
+    console.log(`[createTemplateWithPlaceholders] Section "${section.name}" maps to paragraphs ${startParaIdx} to ${actualEndIdx}`);
+    
+    // Supprimer tous les paragraphes de contenu (sauf le titre)
+    const contentStartIdx = startParaIdx + 1;
+    for (let i = contentStartIdx; i < actualEndIdx && i < paragraphs.length; i++) {
       if (paragraphs[i]) {
         modifiedXml = modifiedXml.replace(paragraphs[i], '');
       }
     }
+    console.log(`[createTemplateWithPlaceholders] Removed ${actualEndIdx - contentStartIdx} paragraphs from "${section.name}"`);
     
-    // Insérer le premier paragraphe avec les placeholders appropriés
-    if (startIdx < paragraphs.length && paragraphs[startIdx]) {
-      const basePara = paragraphs[startIdx];
+    // Insérer un paragraphe avec les placeholders appropriés
+    if (contentStartIdx < paragraphs.length && paragraphs[contentStartIdx]) {
+      const basePara = paragraphs[contentStartIdx];
       let placeholder = '';
       
       if (section.name === 'Compétences') {
@@ -680,6 +677,13 @@ async function createTemplateWithPlaceholders(
       console.log(`[createTemplateWithPlaceholders] Added placeholder for ${section.name}`);
     }
   });
+
+  // Fonction pour extraire le texte d'un paragraphe
+  const extractText = (para: string): string => {
+    const textMatches = para.match(/<w:t[^>]*>(.*?)<\/w:t>/g);
+    if (!textMatches) return '';
+    return textMatches.map((t: string) => t.replace(/<\/?w:t[^>]*>/g, '')).join('').trim();
+  };
 
   // Remplacer le trigramme et le titre dans le header
   for (let i = 0; i < Math.min(10, paragraphs.length); i++) {
