@@ -155,11 +155,17 @@ serve(async (req: Request) => {
       return generatedBuffer;
     }
 
-    const generatedBuffer = await generateCVWithJSZip(
-      templateBuffer,
-      extractedData,
-      template.structure_data
-    );
+      try {
+        const generatedBuffer = await generateCVWithJSZip(
+          templateBuffer,
+          extractedData,
+          template.structure_data
+        );
+        console.log('[generate-cv-word] CV generated successfully');
+      } catch (genError) {
+        console.error('[generate-cv-word] Generation failed:', genError);
+        throw new Error(`CV generation failed: ${genError.message}`);
+      }
       
     console.log('[generate-cv-word] CV generated successfully');
 
