@@ -279,13 +279,14 @@ async function analyzeTemplateStructure(fileData: Blob, templateId: string, supa
 
   // Détection de l'en-tête
   let headerEndIndex = 0;
-  const sectionStarters = ['compétence', 'experience', 'expérience', 'formation', 'profil'];
+  const sectionStarters = ['compétence', 'competence', 'experience', 'expérience', 'formation', 'profil', 'skill'];
   
-  for (let i = 0; i < Math.min(10, extractedContent.length); i++) {
-    const text = extractedContent[i].text.toLowerCase();
-    if (sectionStarters.some(starter => text.includes(starter)) && extractedContent[i].text.length < 50) {
+  for (let i = 0; i < Math.min(15, extractedContent.length); i++) {
+    const text = extractedContent[i].text.toLowerCase().trim();
+    // Détecter les titres de section (courts, souvent en gras)
+    if (sectionStarters.some(starter => text.includes(starter)) && text.length < 60) {
       headerEndIndex = i;
-      console.log(`[analyzeTemplateStructure] Header ends at index ${i}`);
+      console.log(`[analyzeTemplateStructure] Header ends at index ${i}, detected: "${extractedContent[i].text}"`);
       break;
     }
   }
@@ -302,27 +303,34 @@ async function analyzeTemplateStructure(fileData: Blob, templateId: string, supa
   
   const sections: any[] = [];
   const sectionKeywords: Record<string, string[]> = {
-    'Compétences': ['compétence', 'competence', 'skills'],
-    'Expérience': ['expérience', 'experience', 'parcours'],
-    'Formations & Certifications': ['formation', 'certification', 'diplôme', 'education']
+    'Compétences': ['compétence', 'competence', 'skill', 'savoir', 'technologie'],
+    'Expérience': ['expérience', 'experience', 'parcours', 'mission', 'professionnel'],
+    'Formations & Certifications': ['formation', 'certification', 'diplôme', 'education', 'étude']
   };
   
   for (let i = headerEndIndex; i < extractedContent.length; i++) {
-    const text = extractedContent[i].text.toLowerCase();
+    const text = extractedContent[i].text.toLowerCase().trim();
+    const origText = extractedContent[i].text.trim();
     
-    for (const [sectionName, keywords] of Object.entries(sectionKeywords)) {
-      if (keywords.some(kw => text.includes(kw)) && extractedContent[i].text.length < 50) {
-        sections.push({
-          name: sectionName,
-          titleStyle: extractedContent[i].style,
-          startIndex: i,
-          endIndex: i + 100
-        });
-        console.log(`[analyzeTemplateStructure] Section "${sectionName}" detected at index ${i}`);
-        break;
+    // Vérifier si c'est un titre de section (court, souvent en gras ou taille différente)
+    if (origText.length < 60 && extractedContent[i].style.bold) {
+      for (const [sectionName, keywords] of Object.entries(sectionKeywords)) {
+        // Vérifier si le texte contient un mot-clé ET n'est pas déjà détecté
+        if (keywords.some(kw => text.includes(kw)) && !sections.find(s => s.name === sectionName)) {
+          sections.push({
+            name: sectionName,
+            titleStyle: extractedContent[i].style,
+            startIndex: i,
+            endIndex: i + 100
+          });
+          console.log(`[analyzeTemplateStructure] Section "${sectionName}" detected at index ${i}: "${origText}"`);
+          break;
+        }
       }
     }
   }
+  
+  console.log(`[analyzeTemplateStructure] Total sections detected: ${sections.length}`);
   
   // Ajuster les endIndex
   sections.forEach((section, idx) => {
@@ -344,46 +352,73 @@ async function analyzeTemplateStructure(fileData: Blob, templateId: string, supa
   
   const competencesSection = sections.find(s => s.name === 'Compétences');
   if (competencesSection) {
+    console.log(`[analyzeTemplateStructure] Analyzing Compétences section (${competencesSection.startIndex} to ${competencesSection.endIndex})`);
     for (let i = competencesSection.startIndex + 1; i < competencesSection.endIndex; i++) {
       const item = extractedContent[i];
       if (!item) continue;
-      const text = item.text;
+      const text = item.text.trim();
       
-      if (text.includes(':') && text.length < 50) {
+      // Catégories : texte court avec ":" ou en gras
+      if ((text.includes(':') || item.style.bold) && text.length < 50 && !text.includes(',')) {
         skillCategoryStyles.push(item.style);
-        console.log(`[analyzeTemplateStructure] Skill category: ${text.substring(0, 30)}`);
-      } else if (text.includes(',')) {
+        console.log(`[analyzeTemplateStructure] Skill category detected: ${text.substring(0, 40)}`);
+      }
+      // Items : texte avec virgules ou liste
+      else if (text.includes(',') || item.style.bullet) {
         skillItemStyles.push(item.style);
+        console.log(`[analyzeTemplateStructure] Skill items detected: ${text.substring(0, 40)}`);
       }
     }
+  } else {
+    console.warn('[analyzeTemplateStructure] Compétences section NOT found');
   }
   
   const experienceSection = sections.find(s => s.name === 'Expérience');
   if (experienceSection) {
+    console.log(`[analyzeTemplateStructure] Analyzing Expérience section (${experienceSection.startIndex} to ${experienceSection.endIndex})`);
     for (let i = experienceSection.startIndex + 1; i < experienceSection.endIndex; i++) {
       const item = extractedContent[i];
       if (!item) continue;
-      const text = item.text;
+      const text = item.text.trim();
+      const textLower = text.toLowerCase();
       
-      if (/\d{2}\/\d{4}/.test(text) && text.includes('@')) {
+      // Titre de mission : contient des dates et "@"
+      if (/\d{2}\/\d{4}/.test(text) && (text.includes('@') || text.includes('-'))) {
         missionTitleStyles.push(item.style);
-        console.log(`[analyzeTemplateStructure] Mission title: ${text.substring(0, 50)}`);
-      } else if (text.toLowerCase().includes('contexte')) {
+        console.log(`[analyzeTemplateStructure] Mission title detected: ${text.substring(0, 50)}`);
+      }
+      // Contexte : ligne avec "contexte" ou paragraphe descriptif après titre
+      else if (textLower.includes('contexte') || textLower.includes('description')) {
         missionContextStyles.push(item.style);
-      } else if (text.toLowerCase().includes('environnement') || text.toLowerCase().includes('technologies')) {
+        console.log(`[analyzeTemplateStructure] Mission context detected`);
+      }
+      // Environnement : ligne avec "environnement" ou "technologies"
+      else if (textLower.includes('environnement') || textLower.includes('technologie') || textLower.includes('stack')) {
         missionEnvironmentStyles.push(item.style);
-      } else if (item.style.bullet) {
+        console.log(`[analyzeTemplateStructure] Mission environment detected`);
+      }
+      // Réalisations : lignes avec puces
+      else if (item.style.bullet) {
         missionAchievementStyles.push(item.style);
+        console.log(`[analyzeTemplateStructure] Mission achievement detected (bullet)`);
       }
     }
+  } else {
+    console.warn('[analyzeTemplateStructure] Expérience section NOT found');
   }
   
   const formationSection = sections.find(s => s.name === 'Formations & Certifications');
   if (formationSection) {
-    for (let i = formationSection.startIndex + 1; i < formationSection.endIndex; i++) {
+    console.log(`[analyzeTemplateStructure] Analyzing Formations section (${formationSection.startIndex} to ${formationSection.endIndex})`);
+    for (let i = formationSection.startIndex + 1; i < Math.min(formationSection.endIndex, formationSection.startIndex + 20); i++) {
       const item = extractedContent[i];
-      if (item) educationItemStyles.push(item.style);
+      if (item && item.text.trim().length > 3) {
+        educationItemStyles.push(item.style);
+        console.log(`[analyzeTemplateStructure] Education item detected: ${item.text.substring(0, 40)}`);
+      }
     }
+  } else {
+    console.warn('[analyzeTemplateStructure] Formations section NOT found');
   }
 
   console.log('[analyzeTemplateStructure] Normalizing styles...');
