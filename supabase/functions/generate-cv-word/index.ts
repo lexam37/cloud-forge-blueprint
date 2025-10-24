@@ -136,8 +136,24 @@ serve(async (req: Request) => {
 
     if (cvError || !cvDoc) throw new Error('CV document not found or not owned by user');
 
+    // Logs de débogage pour comprendre la structure récupérée
+    console.log('[generate-cv-word] cvDoc.cv_templates type:', typeof cvDoc.cv_templates);
+    console.log('[generate-cv-word] cvDoc.cv_templates is array:', Array.isArray(cvDoc.cv_templates));
+    console.log('[generate-cv-word] cvDoc.cv_templates:', JSON.stringify(cvDoc.cv_templates)?.substring(0, 500));
+
     const extractedData = cvDoc.extracted_data;
-    const templateStructure = cvDoc.cv_templates?.structure_data;
+    
+    // Fix: cv_templates peut être un tableau ou un objet selon la relation
+    const templateStructure = Array.isArray(cvDoc.cv_templates) 
+      ? cvDoc.cv_templates[0]?.structure_data 
+      : cvDoc.cv_templates?.structure_data;
+
+    console.log('[generate-cv-word] templateStructure exists:', !!templateStructure);
+    console.log('[generate-cv-word] templateStructure.detailedStyles exists:', !!templateStructure?.detailedStyles);
+    
+    if (templateStructure?.detailedStyles) {
+      console.log('[generate-cv-word] detailedStyles keys:', Object.keys(templateStructure.detailedStyles));
+    }
 
     if (!extractedData) throw new Error('No extracted data found in CV document');
 
