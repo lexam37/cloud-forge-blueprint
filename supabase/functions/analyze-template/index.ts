@@ -49,50 +49,6 @@ interface DetailedStyle {
   position: 'header' | 'body' | 'footer';
 }
 
-/**
- * Interface pour une section détectée dans le template
- */
-interface TemplateSection {
-  name: string;
-  position: 'header' | 'body' | 'footer';
-  styles: {
-    title: DetailedStyle;
-    content: DetailedStyle;
-  };
-}
-
-/**
- * Interface pour les éléments d'une mission
- */
-interface MissionElementStyles {
-  title: DetailedStyle & { dateFormat: string };
-  location: DetailedStyle | null;
-  context: DetailedStyle | null;
-  achievements: DetailedStyle & { bulletStyle: string };
-  environment: DetailedStyle | null;
-}
-
-/**
- * Interface pour les sous-catégories de compétences
- */
-interface SkillSubcategoryStyle {
-  name: DetailedStyle;
-  items: DetailedStyle;
-  separator: string;
-}
-
-/**
- * Interface pour la mise en page globale
- */
-interface PageLayout {
-  margins: { top: string; right: string; bottom: string; left: string };
-  orientation: 'portrait' | 'landscape';
-  size: string;
-  columns: number;
-  headerMargin: string;
-  footerMargin: string;
-}
-
 const requestSchema = z.object({
   templateId: z.string().uuid({ message: 'templateId must be a valid UUID' })
 });
@@ -183,21 +139,41 @@ serve(async (req: Request) => {
 
 /**
  * Extrait tous les attributs de style détaillés d'un élément HTML
- * @param element - Élément HTML à analyser
- * @param text - Texte de l'élément
- * @param position - Position dans le document (header/body/footer)
- * @returns Objet DetailedStyle contenant tous les attributs de style
  */
 function extractDetailedStyle(element: any, text: string, position: 'header' | 'body' | 'footer'): DetailedStyle {
   const styleAttr = element.getAttribute('style') || '';
   
   // Extraction des attributs de police
-  const font = styleAttr.match(/font-family:([^;]+)/)?.[1]?.trim() || 'Calibri';
+  const font = styleAttr.match(/font-family:([^;]+)/)?.[1]?.trim().replace(/['",]/g, '') || 'Calibri';
   const size = styleAttr.match(/font-size:([^;]+)/)?.[1]?.trim() || '11pt';
-  const colorMatch = styleAttr.match(/color:(#[0-9a-fA-F]{6})/);
-  const color = colorMatch ? colorMatch[1] : '#000000';
-  const bold = styleAttr.includes('font-weight:bold') || styleAttr.includes('font-weight:700');
-  const italic = styleAttr.includes('font-style:italic');
+  const colorMatch = styleAttr.match(/color:(#[0-9a-fA-F]{6}|rgb\([^)]+\))/);
+  let color = '#000000';
+  if (colorMatch) {
+    const colorValue = colorMatch[1];
+    if (colorValue.startsWith('rgb')) {
+      const rgbMatch = colorValue.match(/rgb\((\d+),\s*(\d+),\s*(\d+)\)/);
+      if (rgbMatch) {
+        const r = parseInt(rgbMatch[1]).toString(16).padStart(2, '0');
+        const g = parseInt(rgbMatch[2]).toString(16).padStart(2, '0');
+        const b = parseInt(rgbMatch[3]).toString(16).padStart(2, '0');
+        color = `#${r}${g}${b}`;
+      }
+    } else {
+      color = colorValue;
+    }
+  }
+  
+  const bold = styleAttr.includes('font-weight:bold') || 
+               styleAttr.includes('font-weight:700') || 
+               element.querySelector('strong, b') !== null ||
+               element.tagName === 'STRONG' ||
+               element.tagName === 'B';
+               
+  const italic = styleAttr.includes('font-style:italic') || 
+                 element.querySelector('em, i') !== null ||
+                 element.tagName === 'EM' ||
+                 element.tagName === 'I';
+                 
   const strike = styleAttr.includes('text-decoration:line-through');
   
   // Extraction du soulignement
@@ -210,11 +186,11 @@ function extractDetailedStyle(element: any, text: string, position: 'header' | '
   
   // Détection de la casse
   let textCase: 'uppercase' | 'lowercase' | 'mixed' | 'capitalize' = 'mixed';
-  if (text === text.toUpperCase() && text !== text.toLowerCase()) {
+  if (text && text === text.toUpperCase() && text !== text.toLowerCase()) {
     textCase = 'uppercase';
-  } else if (text === text.toLowerCase()) {
+  } else if (text && text === text.toLowerCase()) {
     textCase = 'lowercase';
-  } else if (text.match(/^[A-Z][a-z]/)) {
+  } else if (text && text.match(/^[A-Z][a-z]/)) {
     textCase = 'capitalize';
   }
   
@@ -275,32 +251,37 @@ function extractDetailedStyle(element: any, text: string, position: 'header' | '
 }
 
 /**
- * Détecte les incohérences dans les styles (ex: couleurs différentes pour le même type d'élément)
- * et retourne le style le plus fréquent
- * @param styles - Tableau de styles à analyser
- * @returns Le style le plus fréquemment utilisé
+ * Détecte les incohérences et retourne le style le plus fréquent
  */
 function getMostFrequentStyle(styles: DetailedStyle[]): DetailedStyle {
   if (styles.length === 0) return {} as DetailedStyle;
   if (styles.length === 1) return styles[0];
   
-  // Comptage des occurrences pour chaque attribut
+  // Comptage des occurrences pour chaque attribut clé
   const colorCounts = new Map<string, number>();
   const fontCounts = new Map<string, number>();
   const sizeCounts = new Map<string, number>();
   
   styles.forEach(style => {
-    colorCounts.set(style.color, (colorCounts.get(style.color) || 0) + 1);
-    fontCounts.set(style.font, (fontCounts.get(style.font) || 0) + 1);
-    sizeCounts.set(style.size, (sizeCounts.get(style.size) || 0) + 1);
+    if (style.color) colorCounts.set(style.color, (colorCounts.get(style.color) || 0) + 1);
+    if (style.font) fontCounts.set(style.font, (fontCounts.get(style.font) || 0) + 1);
+    if (style.size) sizeCounts.set(style.size, (sizeCounts.get(style.size) || 0) + 1);
   });
   
   // Sélection des valeurs les plus fréquentes
-  const mostFrequentColor = Array.from(colorCounts.entries()).sort((a, b) => b[1] - a[1])[0][0];
-  const mostFrequentFont = Array.from(fontCounts.entries()).sort((a, b) => b[1] - a[1])[0][0];
-  const mostFrequentSize = Array.from(sizeCounts.entries()).sort((a, b) => b[1] - a[1])[0][0];
+  const mostFrequentColor = colorCounts.size > 0 
+    ? Array.from(colorCounts.entries()).sort((a, b) => b[1] - a[1])[0][0]
+    : styles[0].color;
+    
+  const mostFrequentFont = fontCounts.size > 0
+    ? Array.from(fontCounts.entries()).sort((a, b) => b[1] - a[1])[0][0]
+    : styles[0].font;
+    
+  const mostFrequentSize = sizeCounts.size > 0
+    ? Array.from(sizeCounts.entries()).sort((a, b) => b[1] - a[1])[0][0]
+    : styles[0].size;
   
-  // Construction du style cohérent
+  // Construction du style cohérent avec le premier comme base
   const baseStyle = styles[0];
   return {
     ...baseStyle,
@@ -312,11 +293,7 @@ function getMostFrequentStyle(styles: DetailedStyle[]): DetailedStyle {
 
 /**
  * Analyse complète de la structure du template DOCX
- * @param arrayBuffer - Contenu binaire du fichier DOCX
- * @param templateId - ID du template dans la base de données
- * @param supabase - Client Supabase
- * @param userId - ID de l'utilisateur
- * @returns Structure complète du template avec tous les styles
+ * Extraction détaillée de l'en-tête, des sections et des styles multi-niveaux
  */
 async function analyzeTemplateStructure(
   arrayBuffer: ArrayBuffer, 
@@ -336,181 +313,326 @@ async function analyzeTemplateStructure(
   const doc = parser.parseFromString(html, 'text/html');
   if (!doc) throw new Error('Failed to parse HTML document');
   
-  const paragraphs = doc.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li');
-  console.log('[analyzeTemplateStructure] Found', paragraphs.length, 'elements');
+  const allElements = doc.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li, img, table');
+  console.log('[analyzeTemplateStructure] Found', allElements.length, 'elements');
 
-  // Collections pour stocker les styles par type d'élément
-  const headerElements: Array<{ text: string; style: DetailedStyle }> = [];
-  const footerElements: Array<{ text: string; style: DetailedStyle }> = [];
-  const sections: TemplateSection[] = [];
-  const missionStyles: MissionElementStyles[] = [];
-  const skillSubcategoryStyles: SkillSubcategoryStyle[] = [];
-  const educationStyles: DetailedStyle[] = [];
+  // === PHASE 1: Extraction de l'en-tête (header) avec logo et coordonnées ===
+  console.log('[analyzeTemplateStructure] Extracting header section...');
+  const headerElements: Array<{ text: string; html: string; style: DetailedStyle; type: string }> = [];
+  let headerEndIndex = 0;
+  let hasLogo = false;
+  let logoSrc = '';
   
-  // Détection des logos et icônes
-  const images = doc.querySelectorAll('img');
-  const hasLogo = images.length > 0;
+  // Les premiers éléments jusqu'à trouver une section connue constituent l'en-tête
+  const sectionStarters = ['compétence', 'experience', 'expérience', 'formation', 'profil'];
   
-  // Mots-clés pour détecter les sections
-  const sectionKeywords: Record<string, string[]> = {
-    'Compétences': ['compétence', 'competence', 'skills', 'savoir-faire'],
-    'Expérience': ['expérience', 'experience', 'expériences', 'work history', 'professional experience', 'parcours'],
-    'Formations & Certifications': ['formation', 'formations', 'certification', 'certifications', 'diplôme', 'diplome', 'education', 'études', 'etudes']
-  };
-  
-  let currentSection: string | null = null;
-  let currentSectionStyle: DetailedStyle | null = null;
-  
-  // Analyse de chaque élément
-  paragraphs.forEach((element: any, index: number) => {
-    const text = element.textContent.trim();
-    if (!text || text.length < 2) return;
+  for (let i = 0; i < Math.min(15, allElements.length); i++) {
+    const el = allElements[i] as any;
+    const text = el.textContent?.trim() || '';
+    const textLower = text.toLowerCase();
     
-    // Détermination de la position dans le document
-    const position: 'header' | 'body' | 'footer' = 
-      index < 3 ? 'header' : 
-      index > paragraphs.length - 3 ? 'footer' : 
-      'body';
-    
-    const style = extractDetailedStyle(element, text, position);
-    
-    // Stockage des éléments d'en-tête et pied de page
-    if (position === 'header') {
-      headerElements.push({ text, style });
-    } else if (position === 'footer') {
-      footerElements.push({ text, style });
+    // Arrêt si on trouve un titre de section principale
+    if (sectionStarters.some(starter => textLower.includes(starter)) && text.length < 50) {
+      headerEndIndex = i;
+      console.log(`[analyzeTemplateStructure] Header ends at index ${i}, detected section: ${text}`);
+      break;
     }
     
-    // Détection des sections
+    const position = 'header' as const;
+    
+    // Traitement des images (logo)
+    if (el.tagName === 'IMG') {
+      hasLogo = true;
+      logoSrc = el.getAttribute('src') || '';
+      console.log('[analyzeTemplateStructure] Logo detected in header');
+      headerElements.push({
+        text: '[LOGO]',
+        html: el.outerHTML,
+        style: extractDetailedStyle(el, '', position),
+        type: 'img'
+      });
+      continue;
+    }
+    
+    // Traitement des tableaux (souvent utilisés pour la mise en page de l'en-tête)
+    if (el.tagName === 'TABLE') {
+      const cells = el.querySelectorAll('td, th');
+      cells.forEach((cell: any) => {
+        const cellText = cell.textContent?.trim() || '';
+        if (cellText.length > 2) {
+          headerElements.push({
+            text: cellText,
+            html: cell.outerHTML,
+            style: extractDetailedStyle(cell, cellText, position),
+            type: 'table-cell'
+          });
+        }
+      });
+      continue;
+    }
+    
+    // Paragraphes et titres
+    if (text.length > 0) {
+      const style = extractDetailedStyle(el, text, position);
+      headerElements.push({
+        text,
+        html: el.outerHTML,
+        style,
+        type: el.tagName.toLowerCase()
+      });
+      
+      // Détection des coordonnées commerciales
+      if (textLower.includes('contact') || 
+          textLower.includes('commercial') || 
+          /\d{2}[.\s]\d{2}[.\s]\d{2}[.\s]\d{2}[.\s]\d{2}/.test(text) ||
+          /@/.test(text) && text.includes('.')) {
+        console.log('[analyzeTemplateStructure] Commercial contact detected:', text.substring(0, 50));
+      }
+    }
+  }
+  
+  console.log(`[analyzeTemplateStructure] Header extracted: ${headerElements.length} elements`);
+
+  // === PHASE 2: Détection des sections principales ===
+  console.log('[analyzeTemplateStructure] Detecting main sections...');
+  
+  interface Section {
+    name: string;
+    titleStyle: DetailedStyle;
+    startIndex: number;
+    endIndex: number;
+  }
+  
+  const sections: Section[] = [];
+  const sectionKeywords: Record<string, string[]> = {
+    'Compétences': ['compétence', 'competence', 'skills'],
+    'Expérience': ['expérience', 'experience', 'parcours'],
+    'Formations & Certifications': ['formation', 'certification', 'diplôme', 'education']
+  };
+  
+  for (let i = headerEndIndex; i < allElements.length; i++) {
+    const el = allElements[i];
+    const text = el.textContent?.trim() || '';
     const textLower = text.toLowerCase();
-    let isSectionTitle = false;
     
     for (const [sectionName, keywords] of Object.entries(sectionKeywords)) {
-      if (keywords.some(keyword => textLower.includes(keyword))) {
-        currentSection = sectionName;
-        currentSectionStyle = style;
-        isSectionTitle = true;
-        
+      if (keywords.some(kw => textLower.includes(kw)) && text.length < 50) {
+        const titleStyle = extractDetailedStyle(el, text, 'body');
         sections.push({
           name: sectionName,
-          position,
-          styles: {
-            title: style,
-            content: style // Will be updated with actual content style
-          }
+          titleStyle,
+          startIndex: i,
+          endIndex: i + 100 // Temporaire, sera ajusté
         });
-        
-        console.log(`[analyzeTemplateStructure] Detected section: ${sectionName}`);
+        console.log(`[analyzeTemplateStructure] Section "${sectionName}" detected at index ${i}`);
         break;
       }
     }
-    
-    // Analyse du contenu des sections
-    if (!isSectionTitle && currentSection) {
-      if (currentSection === 'Compétences') {
-        // Détection des sous-catégories de compétences
-        if (text.includes(':') || text.match(/[A-Z][a-z]+\/[A-Z]/)) {
-          const parts = text.split(':').map((p: string) => p.trim());
-          skillSubcategoryStyles.push({
-            name: style,
-            items: { ...style, bold: false },
-            separator: ':'
-          });
-        }
-      } else if (currentSection === 'Expérience') {
-        // Détection des éléments de mission
-        if (text.match(/\d{2}\/\d{4}\s*-\s*\d{2}\/\d{4}/)) {
-          // Titre de mission avec dates
-          missionStyles.push({
-            title: { ...style, dateFormat: 'MM/YYYY' },
-            location: null,
-            context: null,
-            achievements: { ...style, bulletStyle: 'bullet' },
-            environment: null
-          });
-        } else if (textLower.includes('contexte') || textLower.includes('objectif')) {
-          if (missionStyles.length > 0) {
-            missionStyles[missionStyles.length - 1].context = style;
-          }
-        } else if (textLower.includes('lieu') || textLower.includes('location')) {
-          if (missionStyles.length > 0) {
-            missionStyles[missionStyles.length - 1].location = style;
-          }
-        } else if (textLower.includes('environnement') || textLower.includes('technolog')) {
-          if (missionStyles.length > 0) {
-            missionStyles[missionStyles.length - 1].environment = style;
-          }
-        } else if (style.bullet) {
-          if (missionStyles.length > 0) {
-            missionStyles[missionStyles.length - 1].achievements = { 
-              ...style, 
-              bulletStyle: style.bulletStyle || 'bullet' 
-            };
-          }
-        }
-      } else if (currentSection === 'Formations & Certifications') {
-        if (text.match(/\d{4}/)) {
-          educationStyles.push(style);
-        }
-      }
+  }
+  
+  // Ajuster les endIndex
+  sections.forEach((section, idx) => {
+    if (idx < sections.length - 1) {
+      section.endIndex = sections[idx + 1].startIndex;
+    } else {
+      section.endIndex = allElements.length;
     }
   });
+
+  // === PHASE 3: Analyse détaillée des styles par section ===
+  console.log('[analyzeTemplateStructure] Analyzing detailed styles per section...');
   
-  // Détection des incohérences et normalisation
+  // Compétences : styles multi-niveaux
+  const competencesSection = sections.find(s => s.name === 'Compétences');
+  const skillCategoryStyles: DetailedStyle[] = [];
+  const skillItemStyles: DetailedStyle[] = [];
+  
+  if (competencesSection) {
+    for (let i = competencesSection.startIndex + 1; i < competencesSection.endIndex; i++) {
+      const el = allElements[i] as any;
+      const text = el.textContent?.trim() || '';
+      
+      // Catégories (OS, Langages, etc.) : souvent en gras ou avec ":"
+      if (text.includes(':') || (text.length < 30 && /^[A-Z]/.test(text))) {
+        const style = extractDetailedStyle(el, text, 'body');
+        if (style.bold || (el.querySelector && el.querySelector('strong, b'))) {
+          skillCategoryStyles.push(style);
+          console.log(`[analyzeTemplateStructure] Skill category detected: ${text.substring(0, 30)}`);
+        } else {
+          skillItemStyles.push(style);
+        }
+      }
+      // Items (Windows, Java, etc.) : souvent séparés par des virgules
+      else if (text.includes(',')) {
+        const style = extractDetailedStyle(el, text, 'body');
+        skillItemStyles.push(style);
+      }
+    }
+  }
+  
+  // Expérience : styles des éléments de mission
+  const experienceSection = sections.find(s => s.name === 'Expérience');
+  const missionTitleStyles: DetailedStyle[] = [];
+  const missionContextStyles: DetailedStyle[] = [];
+  const missionAchievementStyles: DetailedStyle[] = [];
+  const missionEnvironmentStyles: DetailedStyle[] = [];
+  let missionDateFormat = 'MM/YYYY';
+  
+  if (experienceSection) {
+    for (let i = experienceSection.startIndex + 1; i < experienceSection.endIndex; i++) {
+      const el = allElements[i] as any;
+      const text = el.textContent?.trim() || '';
+      const textLower = text.toLowerCase();
+      
+      // Titre de mission avec dates
+      if (/\d{2}\/\d{4}/.test(text) && text.includes('@')) {
+        const style = extractDetailedStyle(el, text, 'body');
+        missionTitleStyles.push(style);
+        console.log(`[analyzeTemplateStructure] Mission title detected: ${text.substring(0, 50)}`);
+      }
+      // Contexte
+      else if (textLower.includes('contexte') || textLower.includes('objectif')) {
+        const style = extractDetailedStyle(el, text, 'body');
+        missionContextStyles.push(style);
+      }
+      // Achievements/missions (puces)
+      else if ((el.tagName && el.tagName === 'LI') || /^[•\-\*]/.test(text)) {
+        const style = extractDetailedStyle(el, text, 'body');
+        missionAchievementStyles.push(style);
+      }
+      // Environnement
+      else if (textLower.includes('environnement') || textLower.includes('technolog')) {
+        const style = extractDetailedStyle(el, text, 'body');
+        missionEnvironmentStyles.push(style);
+      }
+    }
+  }
+  
+  // Formation : styles des items
+  const formationSection = sections.find(s => s.name === 'Formations & Certifications');
+  const educationItemStyles: DetailedStyle[] = [];
+  
+  if (formationSection) {
+    for (let i = formationSection.startIndex + 1; i < formationSection.endIndex; i++) {
+      const el = allElements[i] as any;
+      const text = el.textContent?.trim() || '';
+      
+      if (/\d{4}/.test(text) && text.length > 10) {
+        const style = extractDetailedStyle(el, text, 'body');
+        educationItemStyles.push(style);
+      }
+    }
+  }
+  
+  // === PHASE 4: Normalisation des styles ===
   console.log('[analyzeTemplateStructure] Normalizing styles...');
-  const normalizedMissionStyles = missionStyles.length > 0 ? {
-    title: getMostFrequentStyle(missionStyles.map(m => m.title)),
-    location: missionStyles.find(m => m.location)?.location || null,
-    context: missionStyles.find(m => m.context)?.context || null,
-    achievements: getMostFrequentStyle(missionStyles.map(m => m.achievements)),
-    environment: missionStyles.find(m => m.environment)?.environment || null
-  } : null;
   
-  // Extraction de la mise en page globale
-  const pageLayout: PageLayout = {
+  const normalizedSkillCategory = skillCategoryStyles.length > 0 
+    ? getMostFrequentStyle(skillCategoryStyles) 
+    : null;
+    
+  const normalizedSkillItems = skillItemStyles.length > 0 
+    ? getMostFrequentStyle(skillItemStyles) 
+    : null;
+    
+  const normalizedMissionTitle = missionTitleStyles.length > 0 
+    ? getMostFrequentStyle(missionTitleStyles) 
+    : null;
+    
+  const normalizedMissionContext = missionContextStyles.length > 0 
+    ? getMostFrequentStyle(missionContextStyles) 
+    : null;
+    
+  const normalizedMissionAchievements = missionAchievementStyles.length > 0 
+    ? getMostFrequentStyle(missionAchievementStyles) 
+    : null;
+    
+  const normalizedMissionEnvironment = missionEnvironmentStyles.length > 0 
+    ? getMostFrequentStyle(missionEnvironmentStyles) 
+    : null;
+    
+  const normalizedEducation = educationItemStyles.length > 0 
+    ? getMostFrequentStyle(educationItemStyles) 
+    : null;
+
+  // === PHASE 5: Pied de page (footer) ===
+  const footerElements: Array<{ text: string; style: DetailedStyle }> = [];
+  for (let i = Math.max(allElements.length - 5, headerEndIndex); i < allElements.length; i++) {
+    const el = allElements[i] as any;
+    const text = el.textContent?.trim() || '';
+    if (text && text.length > 0 && (!el.tagName || el.tagName !== 'IMG')) {
+      footerElements.push({
+        text,
+        style: extractDetailedStyle(el, text, 'footer')
+      });
+    }
+  }
+
+  // === PHASE 6: Extraction de la mise en page globale ===
+  const pageLayout = {
     margins: {
       top: '2.5cm',
       right: '2cm',
       bottom: '2.5cm',
       left: '2cm'
     },
-    orientation: 'portrait',
+    orientation: 'portrait' as const,
     size: 'A4',
     columns: 1,
     headerMargin: '1.25cm',
     footerMargin: '1.25cm'
   };
   
-  // Construction de la structure finale
+  // === PHASE 7: Construction de la structure finale ===
   const structureData = {
     metadata: {
       analyzedAt: new Date().toISOString(),
-      version: '2.0',
-      totalElements: paragraphs.length
+      version: '3.0',
+      totalElements: allElements.length,
+      headerElementCount: headerElements.length
     },
     pageLayout,
     header: {
       elements: headerElements,
       hasLogo,
-      logoPosition: hasLogo ? 'top-left' : null
+      logoSrc,
+      hasCommercialContact: headerElements.some(el => 
+        el.text.toLowerCase().includes('contact') || 
+        el.text.toLowerCase().includes('commercial') ||
+        /\d{2}[.\s]\d{2}[.\s]\d{2}[.\s]\d{2}[.\s]\d{2}/.test(el.text)
+      )
     },
     footer: {
-      elements: footerElements,
-      hasLogo: false
+      elements: footerElements
     },
-    sections,
+    sections: sections.map(s => ({
+      name: s.name,
+      titleStyle: s.titleStyle
+    })),
     detailedStyles: {
-      missions: normalizedMissionStyles,
       skills: {
-        subcategories: skillSubcategoryStyles.length > 0 ? skillSubcategoryStyles[0] : null
+        sectionTitle: competencesSection?.titleStyle || null,
+        category: normalizedSkillCategory,
+        items: normalizedSkillItems
       },
-      education: educationStyles.length > 0 ? getMostFrequentStyle(educationStyles) : null
+      experience: {
+        sectionTitle: experienceSection?.titleStyle || null,
+        missionTitle: normalizedMissionTitle,
+        missionDateFormat,
+        context: normalizedMissionContext,
+        achievements: normalizedMissionAchievements,
+        environment: normalizedMissionEnvironment
+      },
+      education: {
+        sectionTitle: formationSection?.titleStyle || null,
+        item: normalizedEducation
+      }
     },
     colors: {
-      primary: sections[0]?.styles.title.color || '#000000',
+      primary: sections[0]?.titleStyle.color || '#000000',
       text: '#000000',
-      secondary: sections[1]?.styles.title.color || '#000000',
-      accent: sections[2]?.styles.title.color || '#000000'
+      secondary: sections[1]?.titleStyle.color || '#000000',
+      accent: sections[2]?.titleStyle.color || '#000000'
     }
   };
   
@@ -526,6 +648,6 @@ async function analyzeTemplateStructure(
     throw new Error(`Failed to update template: ${updateError.message}`);
   }
 
-  console.log('[analyzeTemplateStructure] Analysis complete');
+  console.log('[analyzeTemplateStructure] Analysis complete, structure saved');
   return structureData;
 }
