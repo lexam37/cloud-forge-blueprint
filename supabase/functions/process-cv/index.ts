@@ -4,6 +4,8 @@ import { convert } from "https://deno.land/x/deno_mammoth@v0.1.0/mod.ts";
 import { DOMParser } from "https://deno.land/std@0.168.0/dom/mod.ts";
 import { z } from "https://deno.land/x/zod@v3.21.4/mod.ts";
 
+console.log('SUPABASE_DB_URL:', Deno.env.get('SUPABASE_DB_URL') ? 'Set' : 'Missing');
+
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
