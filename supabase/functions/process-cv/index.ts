@@ -107,6 +107,7 @@ serve(async (req: Request) => {
     try {
       const arrayBuffer = await cvFileData.arrayBuffer();
       if (fileType === 'docx' || fileType === 'doc') {
+        const result = await mammoth.convertToHtml({ arrayBuffer });
         const html = result.value;
         if (result.messages && result.messages.length > 0) {
           console.warn('Mammoth conversion warnings:', result.messages);
