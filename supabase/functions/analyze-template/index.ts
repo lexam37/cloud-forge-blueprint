@@ -55,14 +55,19 @@ serve(async (req: Request) => {
     const { templateId } = requestSchema.parse(await req.json());
     console.log('Processing templateId:', templateId);
 
+    // Extract JWT from Authorization header
+    const authHeader = req.headers.get('Authorization');
+    if (!authHeader) throw new Error('Missing Authorization header');
+    const jwt = authHeader.replace('Bearer ', '');
+
     const supabaseUrl = Deno.env.get('SUPABASE_URL');
     const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
     if (!supabaseUrl || !supabaseKey) throw new Error('Missing environment variables');
 
     const supabase = createClient(supabaseUrl, supabaseKey);
 
-    // Vérifier l'utilisateur authentifié (pour RLS)
-    const { data: { user }, error: authError } = await supabase.auth.getUser();
+    // Verify user authentication with JWT
+    const { data: { user }, error: authError } = await supabase.auth.getUser(jwt);
     if (authError || !user) throw new Error('User not authenticated');
 
     const { data: template, error: templateError } = await supabase

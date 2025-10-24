@@ -19,14 +19,19 @@ serve(async (req: Request) => {
   try {
     const { cvDocumentId } = requestSchema.parse(await req.json());
     
+    // Extract JWT from Authorization header
+    const authHeader = req.headers.get('Authorization');
+    if (!authHeader) throw new Error('Missing Authorization header');
+    const jwt = authHeader.replace('Bearer ', '');
+
     const supabaseUrl = Deno.env.get('SUPABASE_URL');
     const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
     if (!supabaseUrl || !supabaseKey) throw new Error('SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY missing');
 
     const supabase = createClient(supabaseUrl, supabaseKey);
 
-    // Vérifier l'utilisateur authentifié (pour RLS)
-    const { data: { user }, error: authError } = await supabase.auth.getUser();
+    // Verify user authentication with JWT
+    const { data: { user }, error: authError } = await supabase.auth.getUser(jwt);
     if (authError || !user) throw new Error('User not authenticated');
 
     const { data: cvDoc, error: cvError } = await supabase
