@@ -223,6 +223,9 @@ export const TemplateManagement = () => {
     setIsAnalyzing(templateId);
 
     try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error("User not authenticated");
+
       const template = templates.find(t => t.id === templateId);
       const isPdf = template?.file_type === 'pdf';
       
@@ -233,14 +236,38 @@ export const TemplateManagement = () => {
           : "Utilisation d'une structure par défaut intelligente",
       });
 
+      // Désactiver tous les autres templates
+      const { error: deactivateError } = await supabase
+        .from('cv_templates')
+        .update({ is_active: false })
+        .eq('user_id', user.id)
+        .neq('id', templateId);
+
+      if (deactivateError) {
+        console.error("Error deactivating templates:", deactivateError);
+      }
+
+      // Appeler l'analyse
       const { data, error } = await supabase.functions.invoke('analyze-template', {
         body: { templateId }
       });
 
       if (error) throw error;
 
+      // Activer ce template
+      const { error: activateError } = await supabase
+        .from('cv_templates')
+        .update({ is_active: true })
+        .eq('id', templateId)
+        .eq('user_id', user.id);
+
+      if (activateError) {
+        console.error("Error activating template:", activateError);
+        throw activateError;
+      }
+
       toast({
-        title: "✅ Template configuré !",
+        title: "✅ Template configuré et activé !",
         description: isPdf 
           ? "La structure visuelle a été extraite avec succès" 
           : "Template prêt à l'emploi avec structure par défaut",

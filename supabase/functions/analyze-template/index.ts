@@ -388,26 +388,36 @@ async function analyzeTemplateStructure(fileData: Blob, templateId: string, supa
   
   const sections: any[] = [];
   const sectionKeywords: Record<string, string[]> = {
-    'Compétences': ['compétence', 'competence', 'skill', 'savoir', 'technologie'],
-    'Expérience': ['expérience', 'experience', 'parcours', 'mission', 'professionnel'],
-    'Formations & Certifications': ['formation', 'certification', 'diplôme', 'education', 'étude']
+    'Compétences': ['compétence', 'competence', 'skill', 'savoir', 'technologie', 'expertise', 'technical', 'technique', 'connaissances', 'aptitudes'],
+    'Expérience': ['expérience', 'experience', 'parcours', 'mission', 'professionnel', 'carrière', 'emploi'],
+    'Formations & Certifications': ['formation', 'certification', 'diplôme', 'education', 'étude', 'académique', 'universitaire']
   };
+  
+  console.log(`[analyzeTemplateStructure] Scanning ${extractedContent.length - headerEndIndex} elements for sections...`);
   
   for (let i = headerEndIndex; i < extractedContent.length; i++) {
     const text = extractedContent[i].text.toLowerCase().trim();
     const origText = extractedContent[i].text.trim();
+    const isBold = extractedContent[i].style.bold;
     
-    // Section = texte court avec un mot-clé
-    if (origText.length < 60) {
+    // Log des candidats potentiels (textes courts et/ou en gras)
+    if ((origText.length < 80 && isBold) || origText.length < 40) {
+      console.log(`[analyzeTemplateStructure] Candidate at ${i}: "${origText}" (bold: ${isBold}, len: ${origText.length})`);
+    }
+    
+    // Section = texte court (< 80 caractères) avec un mot-clé, de préférence en gras
+    if (origText.length < 80) {
       for (const [sectionName, keywords] of Object.entries(sectionKeywords)) {
-        if (keywords.some(kw => text.includes(kw)) && !sections.find(s => s.name === sectionName)) {
+        const hasKeyword = keywords.some(kw => text.includes(kw));
+        
+        if (hasKeyword && !sections.find(s => s.name === sectionName)) {
           sections.push({
             name: sectionName,
             titleStyle: extractedContent[i].style,
             startIndex: i,
             endIndex: i + 100
           });
-          console.log(`[analyzeTemplateStructure] Section "${sectionName}" detected at index ${i}: "${origText}"`);
+          console.log(`[analyzeTemplateStructure] ✅ Section "${sectionName}" detected at index ${i}: "${origText}" (bold: ${isBold})`);
           break;
         }
       }
