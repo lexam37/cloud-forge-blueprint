@@ -584,8 +584,8 @@ async function analyzeTemplateStructure(fileData: Blob, templateId: string, supa
 }
 
 /**
- * Crée un template avec des placeholders docxtemplater en remplaçant le contenu exemple
- * Approche améliorée: trouve les paragraphes par index et remplace leur contenu
+ * Crée un template avec des placeholders docxtemplater en remplaçant tout le contenu exemple
+ * Approche robuste : cherche les sections par leur titre dans le XML
  */
 async function createTemplateWithPlaceholders(
   zipContent: any,
@@ -594,176 +594,118 @@ async function createTemplateWithPlaceholders(
 ): Promise<Uint8Array> {
   console.log('[createTemplateWithPlaceholders] Creating template with placeholders...');
   
-  // Extraire le document.xml
   const documentXml = await zipContent.file('word/document.xml')?.async('string');
   if (!documentXml) {
     throw new Error('document.xml not found in template');
   }
 
-  // Extraire tous les paragraphes
   const paragraphs = documentXml.match(/<w:p\b[^>]*>[\s\S]*?<\/w:p>/g) || [];
   console.log(`[createTemplateWithPlaceholders] Found ${paragraphs.length} paragraphs in template`);
 
   let modifiedXml = documentXml;
-  let replacements = 0;
+  
+  // Fonction pour extraire le texte d'un paragraphe
+  const extractText = (para: string): string => {
+    const textMatches = para.match(/<w:t[^>]*>(.*?)<\/w:t>/g);
+    if (!textMatches) return '';
+    return textMatches.map(t => t.replace(/<\/?w:t[^>]*>/g, '')).join('').trim();
+  };
 
-  // Trouver la section Compétences
-  const competencesSection = sections.find(s => s.name === 'Compétences');
-  if (competencesSection) {
-    console.log(`[createTemplateWithPlaceholders] Processing Compétences section (${competencesSection.startIndex} to ${competencesSection.endIndex})`);
+  // Trouver les indices des titres de section dans les paragraphes XML
+  const findSectionInParagraphs = (sectionName: string): number => {
+    const keywords: { [key: string]: string[] } = {
+      'Compétences': ['compétence', 'competence', 'skill'],
+      'Expérience': ['expérience', 'experience', 'mission', 'parcours'],
+      'Formations & Certifications': ['formation', 'certification', 'diplôme', 'diplome', 'éducation', 'education']
+    };
     
-    // Trouver le premier paragraphe de contenu dans la section (après le titre)
-    for (let i = competencesSection.startIndex + 1; i < competencesSection.endIndex && i < paragraphs.length; i++) {
-      const paragraph = paragraphs[i];
-      const textContent = paragraph.match(/<w:t[^>]*>(.*?)<\/w:t>/g);
-      if (textContent && textContent.length > 0) {
-        // Remplacer uniquement le texte en conservant la structure XML
-        const newParagraph = paragraph.replace(
-          /<w:t[^>]*>.*?<\/w:t>/g,
-          '<w:t>{#competences}{category}: {items}{/competences}</w:t>'
-        );
-        modifiedXml = modifiedXml.replace(paragraph, newParagraph);
-        replacements++;
-        console.log(`[createTemplateWithPlaceholders] Replaced Compétences content at paragraph ${i}`);
-        break; // On remplace seulement le premier paragraphe
+    const sectionKeywords = keywords[sectionName] || [];
+    
+    for (let i = 0; i < paragraphs.length; i++) {
+      const text = extractText(paragraphs[i]).toLowerCase();
+      if (text.length < 80 && sectionKeywords.some(kw => text.includes(kw))) {
+        console.log(`[createTemplateWithPlaceholders] Found section "${sectionName}" at paragraph ${i}: "${text}"`);
+        return i;
       }
     }
-  }
+    return -1;
+  };
 
-  // Trouver la section Expérience
-  const experienceSection = sections.find(s => s.name === 'Expérience');
-  if (experienceSection) {
-    console.log(`[createTemplateWithPlaceholders] Processing Expérience section (${experienceSection.startIndex} to ${experienceSection.endIndex})`);
+  // Trouver les indices des sections
+  const competencesIdx = findSectionInParagraphs('Compétences');
+  const experienceIdx = findSectionInParagraphs('Expérience');
+  const formationsIdx = findSectionInParagraphs('Formations & Certifications');
+
+  // Trier les indices pour déterminer les plages
+  const sectionIndices = [
+    { name: 'Compétences', idx: competencesIdx },
+    { name: 'Expérience', idx: experienceIdx },
+    { name: 'Formations & Certifications', idx: formationsIdx }
+  ].filter(s => s.idx !== -1).sort((a, b) => a.idx - b.idx);
+
+  console.log('[createTemplateWithPlaceholders] Section order:', sectionIndices.map(s => `${s.name} at ${s.idx}`).join(', '));
+
+  // Pour chaque section, identifier la plage et remplacer
+  sectionIndices.forEach((section, idx) => {
+    const startIdx = section.idx + 1; // Commence après le titre
+    const endIdx = idx < sectionIndices.length - 1 ? sectionIndices[idx + 1].idx : paragraphs.length;
     
-    // Trouver et remplacer la première mission
-    let missionFound = false;
-    for (let i = experienceSection.startIndex + 1; i < experienceSection.endIndex && i < paragraphs.length; i++) {
-      const paragraph = paragraphs[i];
-      const textContent = paragraph.match(/<w:t[^>]*>(.*?)<\/w:t>/g);
+    console.log(`[createTemplateWithPlaceholders] Processing ${section.name} from para ${startIdx} to ${endIdx}`);
+    
+    // Supprimer tous les paragraphes de contenu exemple
+    for (let i = startIdx; i < endIdx; i++) {
+      if (paragraphs[i]) {
+        modifiedXml = modifiedXml.replace(paragraphs[i], '');
+      }
+    }
+    
+    // Insérer le premier paragraphe avec les placeholders appropriés
+    if (startIdx < paragraphs.length && paragraphs[startIdx]) {
+      const basePara = paragraphs[startIdx];
+      let placeholder = '';
       
-      if (textContent && textContent.length > 0) {
-        const fullText = textContent.join('');
-        
-        // Détecter les dates (format MM/YYYY - MM/YYYY)
-        if (/\d{2}\/\d{4}/.test(fullText) && !missionFound) {
-          const newParagraph = paragraph.replace(
-            /<w:t[^>]*>.*?<\/w:t>/g,
-            '<w:t>{#missions}{period} {role} @ {client}{/missions}</w:t>'
-          );
-          modifiedXml = modifiedXml.replace(paragraph, newParagraph);
-          missionFound = true;
-          replacements++;
-          console.log(`[createTemplateWithPlaceholders] Replaced Mission title at paragraph ${i}`);
-        }
-        // Détecter les contextes
-        else if (/contexte\s*:/i.test(fullText)) {
-          const newParagraph = paragraph.replace(
-            /<w:t[^>]*>.*?<\/w:t>/g,
-            '<w:t>Contexte: {context}</w:t>'
-          );
-          modifiedXml = modifiedXml.replace(paragraph, newParagraph);
-          replacements++;
-          console.log(`[createTemplateWithPlaceholders] Replaced Context at paragraph ${i}`);
-        }
-        // Détecter les achievements (puces)
-        else if (/<w:numPr>/.test(paragraph)) {
-          const newParagraph = paragraph.replace(
-            /<w:t[^>]*>.*?<\/w:t>/g,
-            '<w:t>{#achievements}{.}{/achievements}</w:t>'
-          );
-          modifiedXml = modifiedXml.replace(paragraph, newParagraph);
-          replacements++;
-          console.log(`[createTemplateWithPlaceholders] Replaced Achievement at paragraph ${i}`);
-          break; // On remplace seulement la première puce
-        }
-        // Détecter l'environnement
-        else if (/environnement\s*:/i.test(fullText)) {
-          const newParagraph = paragraph.replace(
-            /<w:t[^>]*>.*?<\/w:t>/g,
-            '<w:t>Environnement: {environment}</w:t>'
-          );
-          modifiedXml = modifiedXml.replace(paragraph, newParagraph);
-          replacements++;
-          console.log(`[createTemplateWithPlaceholders] Replaced Environment at paragraph ${i}`);
-        }
+      if (section.name === 'Compétences') {
+        placeholder = '{#competences}{category}: {items}\n{/competences}';
+      } else if (section.name === 'Expérience') {
+        placeholder = '{#missions}{period} - {role} @ {client}\n\nContexte: {context}\n\nRéalisations:\n{#achievements}- {.}\n{/achievements}\nEnvironnement: {environment}\n\n{/missions}';
+      } else if (section.name === 'Formations & Certifications') {
+        placeholder = '{#formations}{year} - {degree} - {institution}\n{/formations}';
       }
-    }
-  }
-
-  // Trouver la section Formations
-  const formationSection = sections.find(s => s.name === 'Formations & Certifications');
-  if (formationSection) {
-    console.log(`[createTemplateWithPlaceholders] Processing Formations section (${formationSection.startIndex} to ${formationSection.endIndex})`);
-    
-    // Trouver la première formation (commence souvent par une année)
-    for (let i = formationSection.startIndex + 1; i < formationSection.endIndex && i < paragraphs.length; i++) {
-      const paragraph = paragraphs[i];
-      const textContent = paragraph.match(/<w:t[^>]*>(.*?)<\/w:t>/g);
       
-      if (textContent && textContent.length > 0) {
-        const fullText = textContent.join('');
-        
-        if (/^\d{4}/.test(fullText.trim())) {
-          const newParagraph = paragraph.replace(
-            /<w:t[^>]*>.*?<\/w:t>/g,
-            '<w:t>{#formations}{year} {degree} - {institution}{/formations}</w:t>'
-          );
-          modifiedXml = modifiedXml.replace(paragraph, newParagraph);
-          replacements++;
-          console.log(`[createTemplateWithPlaceholders] Replaced Formation at paragraph ${i}`);
-          break;
-        }
-      }
+      const newPara = basePara.replace(
+        /<w:t[^>]*>.*?<\/w:t>/g,
+        `<w:t xml:space="preserve">${placeholder}</w:t>`
+      );
+      modifiedXml = modifiedXml.replace(basePara, newPara);
+      console.log(`[createTemplateWithPlaceholders] Added placeholder for ${section.name}`);
     }
-  }
+  });
 
-  // Remplacer le trigramme dans les premiers paragraphes (header)
+  // Remplacer le trigramme et le titre dans le header
   for (let i = 0; i < Math.min(10, paragraphs.length); i++) {
-    const paragraph = paragraphs[i];
-    const textContent = paragraph.match(/<w:t[^>]*>(.*?)<\/w:t>/g);
-    
-    if (textContent) {
-      const fullText = textContent.join('');
-      
-      // Chercher un trigramme (3 lettres majuscules)
-      if (/^[A-Z]{3}$/.test(fullText.trim())) {
-        const newParagraph = paragraph.replace(
-          /<w:t[^>]*>[A-Z]{3}<\/w:t>/g,
-          '<w:t>{trigram}</w:t>'
-        );
-        modifiedXml = modifiedXml.replace(paragraph, newParagraph);
-        replacements++;
-        console.log(`[createTemplateWithPlaceholders] Replaced Trigram at paragraph ${i}`);
-        break;
-      }
+    const text = extractText(paragraphs[i]);
+    if (/^[A-Z]{3}$/.test(text)) {
+      const newPara = paragraphs[i].replace(
+        /<w:t[^>]*>[A-Z]{3}<\/w:t>/g,
+        '<w:t>{trigram}</w:t>'
+      );
+      modifiedXml = modifiedXml.replace(paragraphs[i], newPara);
+      console.log(`[createTemplateWithPlaceholders] Replaced trigram`);
+      break;
     }
   }
 
-  // Remplacer le titre professionnel
   for (let i = 0; i < Math.min(15, paragraphs.length); i++) {
-    const paragraph = paragraphs[i];
-    const textContent = paragraph.match(/<w:t[^>]*>(.*?)<\/w:t>/g);
-    
-    if (textContent) {
-      const fullText = textContent.join('').toLowerCase();
-      
-      if (/(consultant|développeur|chef de projet|manager|ingénieur|architecte)/i.test(fullText)) {
-        const newParagraph = paragraph.replace(
-          /<w:t[^>]*>.*?<\/w:t>/g,
-          '<w:t>{title}</w:t>'
-        );
-        modifiedXml = modifiedXml.replace(paragraph, newParagraph);
-        replacements++;
-        console.log(`[createTemplateWithPlaceholders] Replaced Title at paragraph ${i}`);
-        break;
-      }
+    const text = extractText(paragraphs[i]).toLowerCase();
+    if (/(consultant|développeur|chef de projet|manager|ingénieur|architecte)/i.test(text)) {
+      const newPara = paragraphs[i].replace(
+        /<w:t[^>]*>.*?<\/w:t>/g,
+        '<w:t>{title}</w:t>'
+      );
+      modifiedXml = modifiedXml.replace(paragraphs[i], newPara);
+      console.log(`[createTemplateWithPlaceholders] Replaced title`);
+      break;
     }
-  }
-
-  console.log(`[createTemplateWithPlaceholders] Total replacements made: ${replacements}`);
-
-  if (replacements === 0) {
-    console.warn('[createTemplateWithPlaceholders] WARNING: No placeholders were inserted!');
   }
 
   // Mettre à jour le document.xml dans le ZIP
