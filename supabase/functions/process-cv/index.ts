@@ -115,6 +115,9 @@ serve(async (req: Request) => {
 
         const parser = new DOMParser();
         const doc = parser.parseFromString(html, 'text/html');
+        if (!doc) {
+          throw new Error('Failed to parse HTML document');
+        }
         const paragraphs = doc.querySelectorAll('p');
         console.log('Paragraphs found:', paragraphs.length);
 
