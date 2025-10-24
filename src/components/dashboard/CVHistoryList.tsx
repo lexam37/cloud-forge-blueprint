@@ -258,38 +258,70 @@ export const CVHistoryList = () => {
 
   const handleDownloadWord = async (cv: CVDocument) => {
     try {
-      toast({
-        title: "Génération du dossier de compétences...",
-        description: "Format Word",
-      });
+      // Vérifier si le fichier est déjà généré
+      if (cv.generated_file_path && cv.generated_file_type === 'docx') {
+        toast({
+          title: "Téléchargement en cours...",
+          description: "Récupération du fichier",
+        });
 
-      // Appeler la fonction edge pour générer le Word
-      const { data, error: functionError } = await supabase.functions.invoke('generate-cv-word', {
-        body: { cvDocumentId: cv.id }
-      });
+        // Télécharger directement le fichier existant
+        const { data: fileData, error: downloadError } = await supabase.storage
+          .from('cv-generated')
+          .download(cv.generated_file_path);
 
-      if (functionError) throw functionError;
+        if (downloadError) throw downloadError;
 
-      // Télécharger le fichier généré
-      const { data: fileData, error: downloadError } = await supabase.storage
-        .from('cv-generated')
-        .download(data.file_path);
+        const url = URL.createObjectURL(fileData);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `DC-${cv.id.substring(0, 8)}.docx`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
 
-      if (downloadError) throw downloadError;
+        toast({
+          title: "✅ Téléchargement réussi",
+          description: "Dossier de compétences téléchargé",
+        });
+      } else {
+        // Générer le fichier si pas déjà fait
+        toast({
+          title: "Génération du dossier de compétences...",
+          description: "Première génération (cela peut prendre quelques secondes)",
+        });
 
-      const url = URL.createObjectURL(fileData);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `DC-${cv.id.substring(0, 8)}.docx`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+        const { data, error: functionError } = await supabase.functions.invoke('generate-cv-word', {
+          body: { cvDocumentId: cv.id }
+        });
 
-      toast({
-        title: "✅ Téléchargement réussi",
-        description: "Dossier de compétences téléchargé",
-      });
+        if (functionError) throw functionError;
+
+        // Télécharger le fichier nouvellement généré
+        const { data: fileData, error: downloadError } = await supabase.storage
+          .from('cv-generated')
+          .download(data.file_path);
+
+        if (downloadError) throw downloadError;
+
+        const url = URL.createObjectURL(fileData);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `DC-${cv.id.substring(0, 8)}.docx`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+
+        toast({
+          title: "✅ Téléchargement réussi",
+          description: "Dossier de compétences téléchargé",
+        });
+
+        // Recharger la liste pour mettre à jour le statut
+        fetchCVDocuments();
+      }
     } catch (error) {
       console.error('Error downloading Word:', error);
       toast({

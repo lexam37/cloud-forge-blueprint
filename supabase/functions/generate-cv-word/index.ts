@@ -140,166 +140,93 @@ serve(async (req: Request) => {
 });
 
 /**
- * Génère le CV en demandant à l'IA de modifier directement le XML du template
+ * Génère le CV avec une approche de remplacement simple et fiable
  */
 async function generateCVWithAIXML(
   templateBuffer: Uint8Array,
   cvData: any,
   templateStructure: any
 ): Promise<Uint8Array> {
-  console.log('[generateCVWithAIXML] Starting AI-powered XML generation...');
-
-  if (!LOVABLE_API_KEY) {
-    throw new Error('LOVABLE_API_KEY not configured');
-  }
+  console.log('[generateCV] Starting CV generation with simple replacement...');
 
   // Charger le template comme ZIP
   const zip = await JSZip.loadAsync(templateBuffer);
-  const documentXml = await zip.file('word/document.xml')?.async('string');
+  let documentXml = await zip.file('word/document.xml')?.async('string');
   
   if (!documentXml) {
     throw new Error('Could not extract document.xml from template');
   }
 
-  console.log('[generateCVWithAIXML] Extracted XML, length:', documentXml.length);
+  console.log('[generateCV] Template loaded, XML length:', documentXml.length);
 
-  // Préparer un résumé du XML (trop long sinon)
-  const xmlSummary = extractXMLSummary(documentXml);
-  
-  // Préparer les données du CV
-  const cvContent = {
-    trigram: cvData.trigram || 'XXX',
-    title: cvData.title || '',
-    competences: cvData.competences || [],
-    missions: (cvData.missions || []).slice(0, 3), // Limiter à 3 missions pour l'exemple
-    formations: (cvData.formations || []).slice(0, 3)
-  };
+  // 1. Remplacer le trigramme (3 lettres majuscules entre balises <w:t>)
+  const trigramPattern = /<w:t>([A-Z]{3})<\/w:t>/g;
+  const trigramReplacement = `<w:t>${cvData.trigram || 'XXX'}</w:t>`;
+  documentXml = documentXml.replace(trigramPattern, trigramReplacement);
+  console.log('[generateCV] Trigram replaced');
 
-  console.log('[generateCVWithAIXML] CV data prepared');
+  // 2. Remplacer le titre professionnel
+  // Chercher un pattern typique de titre (en gras, grande taille)
+  const titlePattern = /<w:t>([^<>]{10,100})<\/w:t>/g;
+  let titleReplaced = false;
+  documentXml = documentXml.replace(titlePattern, (match, content) => {
+    // Ne remplacer que le premier titre long qui n'est pas le trigramme
+    if (!titleReplaced && content.length > 10 && !/^[A-Z]{3}$/.test(content)) {
+      titleReplaced = true;
+      return `<w:t>${cvData.title || 'Titre Professionnel'}</w:t>`;
+    }
+    return match;
+  });
+  console.log('[generateCV] Title replaced');
 
-  // Prompt pour l'IA
-  const prompt = `Tu es un expert en manipulation de documents Word XML. Tu dois modifier le XML d'un template de CV pour y insérer les données d'un CV.
-
-**IMPORTANT**: Tu dois CONSERVER la structure XML EXACTEMENT, juste remplacer le contenu exemple par les vraies données.
-
-**Structure du template:**
-${JSON.stringify(templateStructure, null, 2)}
-
-**Résumé du XML (sections importantes):**
-${xmlSummary}
-
-**Données du CV à insérer:**
-\`\`\`json
-${JSON.stringify(cvContent, null, 2)}
-\`\`\`
-
-**Ta tâche:**
-1. Repère dans le XML où se trouvent les sections (Compétences, Expérience, Formations)
-2. Remplace le CONTENU exemple par les vraies données du CV
-3. Conserve TOUS les attributs de style, formatage, couleurs, polices
-4. Pour les sections répétitives (compétences, missions), duplique les paragraphes XML nécessaires
-
-**Règles critiques:**
-- Ne change QUE le texte entre les balises <w:t>...</w:t>
-- Conserve TOUTES les balises de style (<w:rPr>, <w:pPr>, etc.)
-- Pour les listes, duplique les paragraphes <w:p>...</w:p>
-- Remplace le trigramme (3 lettres majuscules) par: ${cvContent.trigram}
-- Remplace le titre professionnel par: ${cvContent.title}
-
-Génère le XML modifié complet. CRITIQUE: Réponds UNIQUEMENT avec le XML, sans texte avant ou après, sans markdown.`;
-
-  console.log('[generateCVWithAIXML] Calling Lovable AI for XML generation...');
-
-  // Appeler l'IA en plusieurs fois si nécessaire (le XML peut être long)
-  const chunks = splitXMLForAI(documentXml);
-  let modifiedXml = documentXml;
-
-  for (let i = 0; i < chunks.length; i++) {
-    const chunk = chunks[i];
-    console.log(`[generateCVWithAIXML] Processing chunk ${i + 1}/${chunks.length}...`);
-
-    const chunkPrompt = `Modifie cette partie du XML en insérant les données du CV.
-    
-**Données du CV:**
-- Trigramme: ${cvContent.trigram}
-- Titre: ${cvContent.title}
-- ${cvContent.competences.length} compétences
-- ${cvContent.missions.length} missions
-- ${cvContent.formations.length} formations
-
-**XML à modifier:**
-\`\`\`xml
-${chunk.xml}
-\`\`\`
-
-Réponds UNIQUEMENT avec le XML modifié, sans texte supplémentaire.`;
-
-    try {
-      const aiResponse = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${LOVABLE_API_KEY}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          model: 'google/gemini-2.5-flash', // Utiliser flash pour économiser des tokens
-          messages: [
-            {
-              role: 'system',
-              content: 'Tu es un expert en XML Word. Réponds UNIQUEMENT avec du XML valide, sans commentaires ni texte explicatif.'
-            },
-            {
-              role: 'user',
-              content: chunkPrompt
-            }
-          ],
-          temperature: 0.1,
-          max_tokens: 8000
-        }),
-      });
-
-      if (!aiResponse.ok) {
-        const errorText = await aiResponse.text();
-        console.error('[generateCVWithAIXML] AI error:', aiResponse.status, errorText);
-        console.error('[generateCVWithAIXML] Skipping chunk due to error');
-        continue; // Passer au chunk suivant
+  // 3. Traiter les sections dynamiques (compétences, missions, formations)
+  if (templateStructure && templateStructure.sections) {
+    for (const section of templateStructure.sections) {
+      console.log('[generateCV] Processing section:', section.name, `(${section.title})`);
+      
+      if (section.type === 'list' && section.name === 'Compétences') {
+        // Remplacer les compétences
+        documentXml = replaceSectionContent(
+          documentXml, 
+          section.title,
+          cvData.competences || [],
+          'competence'
+        );
       }
-
-      // Vérifier que la réponse n'est pas vide
-      const responseText = await aiResponse.text();
-      if (!responseText || responseText.trim() === '') {
-        console.error('[generateCVWithAIXML] Empty response from AI');
-        continue;
+      
+      if (section.type === 'list' && section.name === 'Expérience') {
+        // Remplacer les missions
+        documentXml = replaceSectionContent(
+          documentXml,
+          section.title,
+          (cvData.missions || []).map((m: any) => ({
+            title: m.title,
+            client: m.client,
+            period: m.period,
+            description: m.description
+          })),
+          'mission'
+        );
       }
-
-      // Parser le JSON
-      const aiResult = JSON.parse(responseText);
       
-      if (!aiResult.choices?.[0]?.message?.content) {
-        console.error('[generateCVWithAIXML] No content in AI response');
-        continue;
+      if (section.type === 'list' && section.name === 'Formations') {
+        // Remplacer les formations
+        documentXml = replaceSectionContent(
+          documentXml,
+          section.title,
+          (cvData.formations || []).map((f: any) => ({
+            title: f.title,
+            institution: f.institution,
+            year: f.year
+          })),
+          'formation'
+        );
       }
-
-      let modifiedChunk = aiResult.choices[0].message.content;
-      
-      // Nettoyer la réponse (enlever les markdown si présents)
-      modifiedChunk = modifiedChunk.replace(/```xml\n?/g, '').replace(/```\n?/g, '').trim();
-      
-      // Remplacer le chunk original par le chunk modifié
-      modifiedXml = modifiedXml.replace(chunk.xml, modifiedChunk);
-      
-      console.log(`[generateCVWithAIXML] Chunk ${i + 1} processed`);
-    } catch (error) {
-      console.error(`[generateCVWithAIXML] Error processing chunk ${i + 1}:`, error);
-      console.error('[generateCVWithAIXML] Skipping chunk and continuing...');
-      // Continue avec le chunk suivant sans modifier le XML
     }
   }
 
-  console.log('[generateCVWithAIXML] AI processing complete, rebuilding document...');
-
   // Mettre à jour le XML dans le ZIP
-  zip.file('word/document.xml', modifiedXml);
+  zip.file('word/document.xml', documentXml);
 
   // Générer le nouveau DOCX
   const generatedBuffer = await zip.generateAsync({ 
@@ -307,58 +234,75 @@ Réponds UNIQUEMENT avec le XML modifié, sans texte supplémentaire.`;
     compression: 'DEFLATE'
   });
 
-  console.log('[generateCVWithAIXML] Document generated, size:', generatedBuffer.length);
+  console.log('[generateCV] Document generated successfully, size:', generatedBuffer.length);
   return generatedBuffer;
 }
 
 /**
- * Extrait un résumé du XML pour réduire la taille envoyée à l'IA
+ * Remplace le contenu d'une section dans le XML
  */
-function extractXMLSummary(xml: string): string {
-  const sections = [];
+function replaceSectionContent(
+  xml: string,
+  sectionTitle: string,
+  items: any[],
+  itemType: string
+): string {
+  // Trouver le titre de la section
+  const titlePattern = new RegExp(`<w:t[^>]*>${escapeRegex(sectionTitle)}</w:t>`, 'i');
+  const titleMatch = xml.match(titlePattern);
   
-  // Extraire les paragraphes principaux
-  const paragraphs = xml.match(/<w:p\b[^>]*>[\s\S]*?<\/w:p>/g) || [];
-  
-  for (let i = 0; i < Math.min(paragraphs.length, 30); i++) {
-    const p = paragraphs[i];
-    const textMatches = p.match(/<w:t[^>]*>(.*?)<\/w:t>/g) || [];
-    const text = textMatches
-      .map((t: string) => t.replace(/<\/?w:t[^>]*>/g, ''))
-      .join(' ')
-      .trim();
-    
-    if (text.length > 0 && text.length < 100) {
-      sections.push(`[Para ${i}]: "${text}"`);
-    }
+  if (!titleMatch) {
+    console.log(`[replaceSectionContent] Section title not found: ${sectionTitle}`);
+    return xml;
   }
+
+  // Trouver le paragraphe du titre
+  const titleIndex = xml.indexOf(titleMatch[0]);
+  const beforeTitle = xml.substring(0, titleIndex);
+  const afterTitle = xml.substring(titleIndex);
   
-  return sections.slice(0, 20).join('\n');
+  // Trouver le prochain paragraphe après le titre (c'est l'exemple)
+  const exampleParagraphMatch = afterTitle.match(/<w:p\b[^>]*>[\s\S]*?<\/w:p>/);
+  
+  if (!exampleParagraphMatch) {
+    console.log(`[replaceSectionContent] Example paragraph not found after: ${sectionTitle}`);
+    return xml;
+  }
+
+  const exampleParagraph = exampleParagraphMatch[0];
+  const exampleStart = afterTitle.indexOf(exampleParagraph);
+  const beforeExample = afterTitle.substring(0, exampleStart);
+  const afterExample = afterTitle.substring(exampleStart + exampleParagraph.length);
+
+  // Générer les nouveaux paragraphes
+  let newParagraphs = '';
+  
+  for (const item of items) {
+    let newParagraph = exampleParagraph;
+    
+    if (itemType === 'competence') {
+      // Remplacer le texte de la compétence
+      newParagraph = newParagraph.replace(/<w:t[^>]*>.*?<\/w:t>/, `<w:t>${item}</w:t>`);
+    } else if (itemType === 'mission') {
+      // Remplacer les informations de la mission
+      newParagraph = newParagraph.replace(/<w:t[^>]*>.*?<\/w:t>/, 
+        `<w:t>${item.title} - ${item.client} (${item.period})</w:t>`);
+    } else if (itemType === 'formation') {
+      // Remplacer les informations de la formation
+      newParagraph = newParagraph.replace(/<w:t[^>]*>.*?<\/w:t>/, 
+        `<w:t>${item.title} - ${item.institution} (${item.year})</w:t>`);
+    }
+    
+    newParagraphs += newParagraph;
+  }
+
+  // Reconstruire le XML
+  return beforeTitle + titleMatch[0] + beforeExample + newParagraphs + afterExample;
 }
 
 /**
- * Divise le XML en chunks pour traitement par l'IA
+ * Échappe les caractères spéciaux pour regex
  */
-function splitXMLForAI(xml: string): Array<{xml: string, type: string}> {
-  const chunks = [];
-  
-  // Chunk 1: Header (premiers 15000 caractères)
-  const headerChunk = xml.substring(0, 15000);
-  chunks.push({ xml: headerChunk, type: 'header' });
-  
-  // Chunk 2: Body (milieu)
-  if (xml.length > 30000) {
-    const bodyChunk = xml.substring(15000, 30000);
-    chunks.push({ xml: bodyChunk, type: 'body' });
-  }
-  
-  // Chunk 3: Reste
-  if (xml.length > 30000) {
-    const footerChunk = xml.substring(30000);
-    if (footerChunk.length < 15000) {
-      chunks.push({ xml: footerChunk, type: 'footer' });
-    }
-  }
-  
-  return chunks;
+function escapeRegex(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
