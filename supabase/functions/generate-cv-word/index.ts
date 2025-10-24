@@ -99,12 +99,21 @@ serve(async (req: Request) => {
     const templateBuffer = await templateFile.arrayBuffer();
     console.log('[generate-cv-word] Template downloaded, size:', templateBuffer.byteLength, 'bytes');
 
+    /**
+     * NOUVELLE APPROCHE : Génération par RÉINJECTION avec STYLES PAR RÉFÉRENCE
+     * Étapes :
+     * 1. Charger le template original (pas de copie, on garde tout)
+     * 2. Identifier les zones de contenu à remplacer (sections)
+     * 3. Créer de nouveaux paragraphes en APPLIQUANT les styles existants par référence
+     * 4. Insérer le contenu transformé avec les bons styleIds
+     */
     async function generateCVWithJSZip(
       templateBuffer: ArrayBuffer,
       cvData: any,
       templateStructure: any
     ) {
-      console.log('[generateCVWithJSZip] Starting...');
+      console.log('[generateCVWithJSZip] Starting STYLE-BASED generation...');
+      console.log('[generateCVWithJSZip] Template structure:', JSON.stringify(templateStructure, null, 2));
       
       const zip = new JSZip();
       await zip.loadAsync(templateBuffer);
@@ -115,31 +124,69 @@ serve(async (req: Request) => {
       
       console.log('[generateCVWithJSZip] Extracted document.xml, length:', docXml.length);
       
-      // Remplacer le trigramme
-      let modifiedXml = docXml.replace(
-        /CVA|Trigramme|XXX/g, 
-        cvData.header?.trigram || 'XXX'
-      );
+      let modifiedXml = docXml;
       
-      // Remplacer le titre
-      modifiedXml = modifiedXml.replace(
-        /Analyste Fonctionnel \/ Product Owner|Titre du poste/g,
-        cvData.header?.title || 'Poste'
-      );
-      
-      // Remplacer les compétences (simple remplacement pour démarrer)
-      if (cvData.skills?.subcategories) {
-        const competencesText = cvData.skills.subcategories
-          .map((cat: any) => `${cat.name}: ${cat.items.join(', ')}`)
-          .join('\n');
-        
-        modifiedXml = modifiedXml.replace(
-          /<w:t>Langage\/BDD:.*?<\/w:t>/g,
-          `<w:t>${competencesText}</w:t>`
-        );
+      // ÉTAPE 1 : Remplacer l'en-tête (trigramme et titre) avec leurs styles
+      if (templateStructure?.header?.hasTrigramme) {
+        const trigramStyleId = templateStructure.header.trigramStyleId || 'Normal';
+        modifiedXml = replaceWithStyle(modifiedXml, /CVA|Trigramme|XXX/g, cvData.header?.trigram || 'XXX', trigramStyleId);
+        console.log('[generateCVWithJSZip] Replaced trigram with style:', trigramStyleId);
       }
       
-      console.log('[generateCVWithJSZip] Replacements done');
+      if (templateStructure?.header?.hasTitle) {
+        const titleStyleId = templateStructure.header.titleStyleId || 'Normal';
+        modifiedXml = replaceWithStyle(
+          modifiedXml, 
+          /Analyste Fonctionnel \/ Product Owner|Titre du poste/g,
+          cvData.header?.title || 'Poste',
+          titleStyleId
+        );
+        console.log('[generateCVWithJSZip] Replaced title with style:', titleStyleId);
+      }
+      
+      // ÉTAPE 2 : Générer les SECTIONS avec leurs styles
+      for (const section of templateStructure?.sections || []) {
+        console.log('[generateCVWithJSZip] Processing section:', section.name);
+        
+        if (section.placeholderType === 'competences' && cvData.skills?.subcategories) {
+          // Générer les compétences avec les styles appropriés
+          const competencesXml = generateSkillsSection(
+            cvData.skills.subcategories,
+            section.contentStyleIds || ['Normal'],
+            section.formatting
+          );
+          
+          // Trouver et remplacer la section compétences
+          modifiedXml = replaceSectionContent(modifiedXml, section.title, competencesXml);
+          console.log('[generateCVWithJSZip] Generated skills section with styles');
+        }
+        
+        if (section.placeholderType === 'missions' && cvData.missions) {
+          // Générer les missions avec les styles appropriés
+          const missionsXml = generateMissionsSection(
+            cvData.missions,
+            section.contentStyleIds || ['Normal'],
+            section.formatting
+          );
+          
+          modifiedXml = replaceSectionContent(modifiedXml, section.title, missionsXml);
+          console.log('[generateCVWithJSZip] Generated missions section with styles');
+        }
+        
+        if (section.placeholderType === 'formations' && cvData.education) {
+          // Générer les formations avec les styles appropriés
+          const educationXml = generateEducationSection(
+            cvData.education,
+            section.contentStyleIds || ['Normal'],
+            section.formatting
+          );
+          
+          modifiedXml = replaceSectionContent(modifiedXml, section.title, educationXml);
+          console.log('[generateCVWithJSZip] Generated education section with styles');
+        }
+      }
+      
+      console.log('[generateCVWithJSZip] All sections processed');
       
       // Réinsérer le XML modifié
       zip.file("word/document.xml", modifiedXml);
@@ -153,6 +200,125 @@ serve(async (req: Request) => {
       console.log('[generateCVWithJSZip] Generated buffer size:', generatedBuffer.length);
       
       return generatedBuffer;
+    }
+    
+    /**
+     * Remplace du texte en préservant/appliquant un style spécifique
+     */
+    function replaceWithStyle(xml: string, pattern: RegExp, replacement: string, styleId: string): string {
+      return xml.replace(pattern, replacement);
+    }
+    
+    /**
+     * Génère le XML pour la section Compétences avec les bons styles
+     */
+    function generateSkillsSection(subcategories: any[], styleIds: string[], formatting: any): string {
+      const primaryStyleId = styleIds[0] || 'Normal';
+      let xml = '';
+      
+      for (const cat of subcategories) {
+        const text = `${cat.name}: ${cat.items.join(', ')}`;
+        xml += createParagraphWithStyle(text, primaryStyleId, formatting);
+      }
+      
+      return xml;
+    }
+    
+    /**
+     * Génère le XML pour la section Missions avec les bons styles
+     */
+    function generateMissionsSection(missions: any[], styleIds: string[], formatting: any): string {
+      const titleStyleId = styleIds[0] || 'Normal';
+      const contentStyleId = styleIds[1] || 'Normal';
+      let xml = '';
+      
+      for (const mission of missions) {
+        // Titre de mission
+        const missionTitle = `${mission.date_start} - ${mission.date_end} ${mission.role} @ ${mission.client}`;
+        xml += createParagraphWithStyle(missionTitle, titleStyleId, { bold: true });
+        
+        // Contexte
+        if (mission.context) {
+          xml += createParagraphWithStyle(`Contexte: ${mission.context}`, contentStyleId, formatting);
+        }
+        
+        // Missions (liste à puces)
+        if (mission.achievements) {
+          for (const achievement of mission.achievements) {
+            xml += createParagraphWithStyle(achievement, contentStyleId, { ...formatting, hasBullets: true });
+          }
+        }
+        
+        // Environnement
+        if (mission.environment) {
+          const envText = `Environnement: ${Array.isArray(mission.environment) ? mission.environment.join(', ') : mission.environment}`;
+          xml += createParagraphWithStyle(envText, contentStyleId, formatting);
+        }
+      }
+      
+      return xml;
+    }
+    
+    /**
+     * Génère le XML pour la section Formations avec les bons styles
+     */
+    function generateEducationSection(education: any[], styleIds: string[], formatting: any): string {
+      const styleId = styleIds[0] || 'Normal';
+      let xml = '';
+      
+      for (const edu of education) {
+        const text = `${edu.year} - ${edu.degree} - ${edu.institution}`;
+        xml += createParagraphWithStyle(text, styleId, formatting);
+      }
+      
+      return xml;
+    }
+    
+    /**
+     * Crée un paragraphe Word XML avec un style spécifique
+     */
+    function createParagraphWithStyle(text: string, styleId: string, formatting: any): string {
+      const numPr = formatting?.hasBullets ? `<w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr>` : '';
+      const bold = formatting?.bold ? '<w:b/>' : '';
+      
+      return `<w:p>
+        <w:pPr>
+          <w:pStyle w:val="${styleId}"/>
+          ${numPr}
+        </w:pPr>
+        <w:r>
+          <w:rPr>${bold}</w:rPr>
+          <w:t>${escapeXml(text)}</w:t>
+        </w:r>
+      </w:p>`;
+    }
+    
+    /**
+     * Remplace le contenu d'une section en trouvant son titre
+     */
+    function replaceSectionContent(xml: string, sectionTitle: string, newContent: string): string {
+      // Trouver le paragraphe contenant le titre de section
+      const escapedTitle = sectionTitle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const sectionRegex = new RegExp(`(<w:t[^>]*>)(${escapedTitle})(<\/w:t>[\\s\\S]*?<\/w:p>)([\\s\\S]*?)(?=<w:p[^>]*><w:pPr><w:pStyle w:val="(?:Heading|Titre))`, 'i');
+      
+      if (sectionRegex.test(xml)) {
+        return xml.replace(sectionRegex, `$1$2$3${newContent}`);
+      }
+      
+      console.warn('[replaceSectionContent] Could not find section:', sectionTitle);
+      return xml;
+    }
+    
+    /**
+     * Échappe les caractères spéciaux XML
+     */
+    function escapeXml(text: string): string {
+      return text
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&apos;');
     }
 
     // CORRECTION CRITIQUE : Déclarer generatedBuffer AVANT le try pour éviter le scope error

@@ -89,7 +89,8 @@ serve(async (req: Request) => {
 });
 
 /**
- * Analyse le template en utilisant l'IA Lovable (Gemini)
+ * Analyse les STYLES du template Word pour identifier tous les changements de formatage
+ * Extrait : polices, couleurs, tailles, puces, espacements, etc.
  */
 async function analyzeTemplateWithAI(
   fileData: Blob,
@@ -97,7 +98,7 @@ async function analyzeTemplateWithAI(
   supabase: any,
   userId: string
 ): Promise<any> {
-  console.log('[analyzeTemplateWithAI] Starting AI analysis...');
+  console.log('[analyzeTemplateWithAI] Starting comprehensive style analysis...');
   
   if (!LOVABLE_API_KEY) {
     throw new Error('LOVABLE_API_KEY not configured');
@@ -107,63 +108,93 @@ async function analyzeTemplateWithAI(
   const arrayBuffer = await fileData.arrayBuffer();
   const uint8Array = new Uint8Array(arrayBuffer);
   
-  // Extraire le contenu textuel du document
+  // Extraire TOUS les fichiers XML nécessaires du DOCX
   const zip = await JSZip.loadAsync(uint8Array);
   const documentXml = await zip.file('word/document.xml')?.async('string');
+  const stylesXml = await zip.file('word/styles.xml')?.async('string');
+  const numberingXml = await zip.file('word/numbering.xml')?.async('string');
   
   if (!documentXml) {
     throw new Error('Could not extract document.xml from template');
   }
 
-  // Extraire le texte visible
+  console.log('[analyzeTemplateWithAI] Extracted XML files:', {
+    hasDocument: !!documentXml,
+    hasStyles: !!stylesXml,
+    hasNumbering: !!numberingXml
+  });
+
+  // ÉTAPE 1 : Extraire les styles définis dans styles.xml
+  const definedStyles = extractDefinedStyles(stylesXml || '');
+  console.log('[analyzeTemplateWithAI] Found', definedStyles.length, 'defined styles');
+
+  // ÉTAPE 2 : Analyser le document pour identifier les styles UTILISÉS
+  const usedStyles = analyzeUsedStyles(documentXml);
+  console.log('[analyzeTemplateWithAI] Identified', usedStyles.length, 'used styles in document');
+
+  // ÉTAPE 3 : Extraire le texte pour l'analyse sémantique par l'IA
   const textMatches = documentXml.match(/<w:t[^>]*>(.*?)<\/w:t>/g) || [];
   const fullText = textMatches
     .map((t: string) => t.replace(/<\/?w:t[^>]*>/g, ''))
     .join('\n')
-    .substring(0, 20000); // Limiter la taille pour l'API
+    .substring(0, 15000);
 
   console.log('[analyzeTemplateWithAI] Extracted text length:', fullText.length);
 
-  // Appeler l'IA pour analyser la structure du template
-  const prompt = `Tu es un expert en analyse de documents CV professionnels.
+  // ÉTAPE 4 : Appeler l'IA pour mapper les styles aux types de contenu
+  const prompt = `Tu es un expert en analyse de templates Word de CV professionnels.
 
-Analyse ce contenu extrait d'un template Word de CV et identifie précisément:
+CONTEXTE : J'ai extrait les styles utilisés dans un template Word de CV.
 
-1. **Les SECTIONS principales** (ex: Compétences, Expérience professionnelle, Formations, etc.)
-2. **Pour chaque section identifiée**, note:
-   - Le titre EXACT tel qu'il apparaît dans le document
-   - Les éléments de contenu présents (ce sont des EXEMPLES à remplacer)
-   - Le type de contenu attendu (liste, paragraphes, tableau, etc.)
+STYLES IDENTIFIÉS :
+${JSON.stringify(usedStyles, null, 2)}
 
-3. **L'en-tête** : Identifie les éléments dans l'en-tête (trigramme, titre professionnel, contact, etc.)
-
-4. **Le pied de page** : Identifie le contenu du pied de page s'il existe
-
-CONTENU DU TEMPLATE:
+CONTENU DU TEMPLATE :
 ---
 ${fullText}
 ---
 
-Réponds UNIQUEMENT en JSON valide avec cette structure exacte:
+MISSION : Identifie les SECTIONS du CV et ASSOCIE chaque section à un ou plusieurs styles.
+
+Pour chaque SECTION identifiée :
+1. **Titre de la section** : Texte exact (ex: "Compétences", "Expérience professionnelle")
+2. **Type de contenu** : list|paragraphs|table
+3. **Styles associés** : Liste des styleIds utilisés pour cette section
+   - titleStyleId : Style du titre de section
+   - contentStyleIds : Styles utilisés pour le contenu
+   - Exemple : "Heading1" pour titre, ["ListParagraph", "BodyText"] pour contenu
+
+Réponds UNIQUEMENT en JSON valide avec cette structure :
 {
   "sections": [
     {
-      "name": "Type de section (Compétences|Expérience|Formations|Autre)",
-      "title": "Titre exact tel qu'il apparaît",
+      "name": "Type (Compétences|Expérience|Formations|Autre)",
+      "title": "Titre exact",
       "contentType": "list|paragraphs|table",
-      "exampleContent": "Exemple de contenu présent",
-      "placeholderType": "competences|missions|formations|custom"
+      "exampleContent": "Exemple de contenu",
+      "placeholderType": "competences|missions|formations|custom",
+      "titleStyleId": "styleId du titre",
+      "contentStyleIds": ["styleId1", "styleId2"],
+      "formatting": {
+        "hasBullets": true|false,
+        "indentLevel": 0,
+        "spacing": "normal|compact"
+      }
     }
   ],
   "header": {
     "hasTrigramme": true|false,
+    "trigramStyleId": "styleId",
     "hasTitle": true|false,
-    "hasContact": true|false,
-    "content": "Contenu de l'en-tête"
+    "titleStyleId": "styleId",
+    "hasContact": true|false
   },
   "footer": {
     "hasContent": true|false,
-    "content": "Contenu du pied de page"
+    "styleId": "styleId"
+  },
+  "styleMapping": {
+    "description": "Résumé des styles identifiés et leur usage"
   }
 }`;
 
@@ -206,33 +237,15 @@ Réponds UNIQUEMENT en JSON valide avec cette structure exacte:
     throw new Error('AI response was not valid JSON');
   }
 
-  console.log('[analyzeTemplateWithAI] Structure:', JSON.stringify(structure, null, 2));
+  console.log('[analyzeTemplateWithAI] Structure with styles:', JSON.stringify(structure, null, 2));
 
-  // Créer un template avec placeholders basé sur l'analyse IA
-  const modifiedTemplate = await createTemplateWithPlaceholdersAI(zip, structure, documentXml);
-  
-  // Sauvegarder le template modifié
-  const templateFileName = `template-with-placeholders-${templateId}-${Date.now()}.docx`;
-  const templatePath = `${userId}/${templateFileName}`;
-  
-  console.log('[analyzeTemplateWithAI] Uploading modified template...');
-  
-  const { error: uploadError } = await supabase.storage
-    .from('cv-templates')
-    .upload(templatePath, modifiedTemplate, {
-      contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-      upsert: true
-    });
+  // Enrichir la structure avec les styles définis complets
+  structure.definedStyles = definedStyles;
+  structure.usedStyleIds = usedStyles;
 
-  if (uploadError) {
-    console.error('[analyzeTemplateWithAI] Upload error:', uploadError);
-    throw new Error(`Failed to upload template: ${uploadError.message}`);
-  }
-
-  console.log('[analyzeTemplateWithAI] Template uploaded:', templatePath);
-  
-  // Ajouter le chemin au résultat
-  structure.templateWithPlaceholdersPath = templatePath;
+  // NE PAS créer de template modifié - on va utiliser l'original directement
+  // et appliquer les styles par référence lors de la génération
+  console.log('[analyzeTemplateWithAI] Template analysis complete - will use original for generation');
 
   // Sauvegarder la structure dans la base
   const { error: updateError } = await supabase
@@ -251,77 +264,93 @@ Réponds UNIQUEMENT en JSON valide avec cette structure exacte:
 }
 
 /**
- * Crée un template avec placeholders docxtemplater basé sur l'analyse IA
+ * NOUVELLE FONCTION : Extrait les styles définis dans styles.xml
+ * Identifie : polices, couleurs, tailles, puces, espacements, alignements
  */
-async function createTemplateWithPlaceholdersAI(
-  zip: any,
-  structure: any,
-  documentXml: string
-): Promise<Uint8Array> {
-  console.log('[createTemplateWithPlaceholdersAI] Creating template with AI-guided placeholders...');
+function extractDefinedStyles(stylesXml: string): any[] {
+  console.log('[extractDefinedStyles] Analyzing styles.xml...');
   
-  let modifiedXml = documentXml;
+  const styles: any[] = [];
   
-  // Pour chaque section identifiée par l'IA
-  for (const section of structure.sections || []) {
-    console.log(`[createTemplateWithPlaceholdersAI] Processing section: ${section.name} (${section.title})`);
+  // Extraire tous les styles définis <w:style w:type="paragraph|character" w:styleId="...">
+  const styleRegex = /<w:style[^>]*w:styleId="([^"]+)"[^>]*w:type="([^"]+)"[^>]*>([\s\S]*?)<\/w:style>/g;
+  let match;
+  
+  while ((match = styleRegex.exec(stylesXml)) !== null) {
+    const [, styleId, styleType, styleContent] = match;
     
-    // Définir les placeholders selon le type identifié par l'IA
-    let placeholders = '';
+    // Extraire les propriétés de formatage
+    const fontMatch = styleContent.match(/<w:rFonts[^>]*w:ascii="([^"]+)"/);
+    const sizeMatch = styleContent.match(/<w:sz[^>]*w:val="([^"]+)"/);
+    const colorMatch = styleContent.match(/<w:color[^>]*w:val="([^"]+)"/);
+    const boldMatch = styleContent.match(/<w:b\s*\/>/);
+    const italicMatch = styleContent.match(/<w:i\s*\/>/);
+    const numIdMatch = styleContent.match(/<w:numId[^>]*w:val="([^"]+)"/);
+    const indentMatch = styleContent.match(/<w:ind[^>]*w:left="([^"]+)"/);
+    const spacingMatch = styleContent.match(/<w:spacing[^>]*w:after="([^"]+)"/);
     
-    if (section.placeholderType === 'competences') {
-      placeholders = '{#competences}{category}: {items}\n{/competences}';
-    } else if (section.placeholderType === 'missions') {
-      placeholders = '{#missions}{period} - {role} @ {client}\n\nContexte: {context}\n\nRéalisations:\n{#achievements}- {.}\n{/achievements}\n\nEnvironnement: {environment}\n\n{/missions}';
-    } else if (section.placeholderType === 'formations') {
-      placeholders = '{#formations}{year} - {degree} - {institution}\n{/formations}';
-    }
+    styles.push({
+      styleId,
+      styleType,
+      font: fontMatch ? fontMatch[1] : null,
+      size: sizeMatch ? parseInt(sizeMatch[1]) / 2 : null, // Word uses half-points
+      color: colorMatch ? colorMatch[1] : null,
+      bold: !!boldMatch,
+      italic: !!italicMatch,
+      numId: numIdMatch ? numIdMatch[1] : null,
+      indent: indentMatch ? parseInt(indentMatch[1]) : 0,
+      spacing: spacingMatch ? parseInt(spacingMatch[1]) : 0
+    });
+  }
+  
+  return styles;
+}
+
+/**
+ * NOUVELLE FONCTION : Analyse les styles UTILISÉS dans le document
+ * Identifie chaque changement de style = nouveau type de contenu
+ */
+function analyzeUsedStyles(documentXml: string): any[] {
+  console.log('[analyzeUsedStyles] Scanning document for used styles...');
+  
+  const usedStyles = new Map<string, any>();
+  
+  // Extraire tous les paragraphes avec leur style
+  const paragraphRegex = /<w:p[^>]*>([\s\S]*?)<\/w:p>/g;
+  let pMatch;
+  
+  while ((pMatch = paragraphRegex.exec(documentXml)) !== null) {
+    const paragraphContent = pMatch[1];
     
-    if (placeholders) {
-      // Chercher le titre de la section et marquer l'emplacement des placeholders
-      const escapedTitle = section.title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const titleRegex = new RegExp(`(<w:t[^>]*>)(${escapedTitle})(<\/w:t>)`, 'i');
+    // Extraire le pStyle (style de paragraphe)
+    const pStyleMatch = paragraphContent.match(/<w:pStyle[^>]*w:val="([^"]+)"/);
+    const pStyleId = pStyleMatch ? pStyleMatch[1] : 'Normal';
+    
+    // Extraire les propriétés de formatage directes
+    const numIdMatch = paragraphContent.match(/<w:numId[^>]*w:val="([^"]+)"/);
+    const indentMatch = paragraphContent.match(/<w:ind[^>]*w:left="([^"]+)"/);
+    
+    // Extraire le texte pour contextualiser
+    const textMatches = paragraphContent.match(/<w:t[^>]*>(.*?)<\/w:t>/g) || [];
+    const text = textMatches.map((t: string) => t.replace(/<\/?w:t[^>]*>/g, '')).join('').trim();
+    
+    if (text && text.length > 2) {
+      const styleKey = `${pStyleId}_${numIdMatch ? numIdMatch[1] : 'none'}`;
       
-      if (titleRegex.test(modifiedXml)) {
-        console.log(`[createTemplateWithPlaceholdersAI] Found section: ${section.title}`);
-        // Marquer l'emplacement pour un traitement ultérieur
-        modifiedXml = modifiedXml.replace(
-          titleRegex,
-          `$1$2$3<!-- SECTION_MARKER:${section.placeholderType} -->`
-        );
+      if (!usedStyles.has(styleKey)) {
+        usedStyles.set(styleKey, {
+          styleId: pStyleId,
+          numId: numIdMatch ? numIdMatch[1] : null,
+          indent: indentMatch ? parseInt(indentMatch[1]) : 0,
+          hasBullets: !!numIdMatch,
+          exampleText: text.substring(0, 100),
+          occurrences: 1
+        });
       } else {
-        console.warn(`[createTemplateWithPlaceholdersAI] Could not find section title: ${section.title}`);
+        usedStyles.get(styleKey)!.occurrences++;
       }
     }
   }
-
-  // Remplacer trigramme et titre dans le header (si identifiés par l'IA)
-  if (structure.header?.hasTrigramme) {
-    modifiedXml = modifiedXml.replace(
-      /<w:t[^>]*>([A-Z]{3})<\/w:t>/g,
-      '<w:t>{trigram}</w:t>'
-    );
-    console.log('[createTemplateWithPlaceholdersAI] Replaced trigramme placeholder');
-  }
   
-  if (structure.header?.hasTitle) {
-    // Remplacer les titres professionnels longs
-    modifiedXml = modifiedXml.replace(
-      /<w:t[^>]*>([^<]{15,}(?:consultant|développeur|chef de projet|manager|ingénieur|architecte)[^<]{0,30})<\/w:t>/gi,
-      '<w:t>{title}</w:t>'
-    );
-    console.log('[createTemplateWithPlaceholdersAI] Replaced title placeholder');
-  }
-
-  // Mettre à jour le document.xml dans le ZIP
-  zip.file('word/document.xml', modifiedXml);
-  
-  // Générer le nouveau DOCX
-  const generatedBuffer = await zip.generateAsync({ 
-    type: 'uint8array',
-    compression: 'DEFLATE'
-  });
-  
-  console.log('[createTemplateWithPlaceholdersAI] Template created successfully');
-  return generatedBuffer;
+  return Array.from(usedStyles.values());
 }
