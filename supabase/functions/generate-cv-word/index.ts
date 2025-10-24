@@ -21,6 +21,87 @@ const requestSchema = z.object({
   cvDocumentId: z.string().uuid({ message: 'cvDocumentId must be a valid UUID' })
 });
 
+/**
+ * Convertit une couleur hex en objet compatible docx
+ */
+function hexToDocxColor(hex: string): string {
+  if (!hex || hex === '#000000') return '000000';
+  return hex.replace('#', '');
+}
+
+/**
+ * Convertit des points en half-points (utilisé par docx pour les tailles de police)
+ */
+function ptToHalfPt(pt: string): number {
+  const num = parseFloat(pt.replace('pt', ''));
+  return Math.round(num * 2);
+}
+
+/**
+ * Convertit des points en twips (1/20 de point, utilisé pour les espacements)
+ */
+function ptToTwip(pt: string): number {
+  const num = parseFloat(pt.replace('pt', ''));
+  return Math.round(num * 20);
+}
+
+/**
+ * Applique les styles détaillés d'un élément du template aux options de TextRun
+ */
+function applyDetailedStyleToTextRun(style: any): any {
+  const options: any = {};
+  
+  if (style.font) options.font = style.font;
+  if (style.size) options.size = ptToHalfPt(style.size);
+  if (style.color && style.color !== '#000000') options.color = hexToDocxColor(style.color);
+  if (style.bold) options.bold = true;
+  if (style.italic) options.italics = true;
+  if (style.strike) options.strike = true;
+  if (style.case === 'uppercase') options.allCaps = true;
+  if (style.case === 'lowercase') options.smallCaps = false;
+  
+  if (style.underline) {
+    options.underline = {
+      type: UnderlineType.SINGLE,
+      color: style.underline.color ? hexToDocxColor(style.underline.color) : undefined
+    };
+  }
+  
+  return options;
+}
+
+/**
+ * Applique les styles détaillés d'un élément du template aux options de Paragraph
+ */
+function applyDetailedStyleToParagraph(style: any): any {
+  const options: any = {};
+  
+  // Alignement
+  if (style.alignment === 'center') options.alignment = AlignmentType.CENTER;
+  else if (style.alignment === 'right') options.alignment = AlignmentType.RIGHT;
+  else if (style.alignment === 'justify') options.alignment = AlignmentType.JUSTIFIED;
+  else options.alignment = AlignmentType.LEFT;
+  
+  // Espacements
+  const spacing: any = {};
+  if (style.spacingBefore) spacing.before = ptToTwip(style.spacingBefore);
+  if (style.spacingAfter) spacing.after = ptToTwip(style.spacingAfter);
+  if (Object.keys(spacing).length > 0) options.spacing = spacing;
+  
+  // Retraits
+  const indent: any = {};
+  if (style.indent) indent.left = ptToTwip(style.indent);
+  if (style.firstLineIndent) indent.firstLine = ptToTwip(style.firstLineIndent);
+  if (Object.keys(indent).length > 0) options.indent = indent;
+  
+  // Puces
+  if (style.bullet && style.bulletStyle === 'bullet') {
+    options.bullet = { level: 0 };
+  }
+  
+  return options;
+}
+
 serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
@@ -65,202 +146,373 @@ serve(async (req: Request) => {
     // Génération avec styles du template
     const sections: Paragraph[] = [];
     const templateStyles = templateStructure?.detailedStyles || {};
+    const headerStyles = templateStructure?.headerElements || [];
+    
+    console.log('[generate-cv-word] Template styles available:', Object.keys(templateStyles));
 
-    // Header section
+    // === EN-TÊTE : Application des styles du template ===
+    // Extraction des éléments d'en-tête du template
+    if (headerStyles.length > 0) {
+      console.log('[generate-cv-word] Applying header styles from template');
+      headerStyles.forEach((headerEl: any) => {
+        if (headerEl.type === 'img') {
+          // Logo - à implémenter si nécessaire avec ImageRun
+          console.log('[generate-cv-word] Logo detected in header (skipped for now)');
+        } else if (headerEl.text && headerEl.text.length > 2) {
+          // Texte d'en-tête (coordonnées commerciales, etc.)
+          const textOptions = applyDetailedStyleToTextRun(headerEl.style);
+          const paraOptions = applyDetailedStyleToParagraph(headerEl.style);
+          
+          sections.push(
+            new Paragraph({
+              ...paraOptions,
+              children: [
+                new TextRun({
+                  text: headerEl.text,
+                  ...textOptions
+                })
+              ]
+            })
+          );
+        }
+      });
+    }
+
+    // Trigramme avec style du template
+    const trigramStyle = templateStyles.header?.trigram || {};
+    const trigramTextOptions = applyDetailedStyleToTextRun(trigramStyle);
+    const trigramParaOptions = applyDetailedStyleToParagraph(trigramStyle);
+    
     sections.push(
       new Paragraph({
-        text: extractedData.header?.trigram || 'XXX',
-        alignment: AlignmentType.CENTER,
-        heading: HeadingLevel.HEADING_1,
-        spacing: { after: 200 }
+        ...trigramParaOptions,
+        children: [
+          new TextRun({
+            text: extractedData.header?.trigram || 'XXX',
+            ...trigramTextOptions,
+            bold: trigramTextOptions.bold !== undefined ? trigramTextOptions.bold : true
+          })
+        ]
       })
     );
 
+    // Titre professionnel avec style du template
     if (extractedData.header?.title) {
+      const titleStyle = templateStyles.header?.title || {};
+      const titleTextOptions = applyDetailedStyleToTextRun(titleStyle);
+      const titleParaOptions = applyDetailedStyleToParagraph(titleStyle);
+      
       sections.push(
         new Paragraph({
-          text: extractedData.header.title,
-          alignment: AlignmentType.CENTER,
-          spacing: { after: 400 }
+          ...titleParaOptions,
+          children: [
+            new TextRun({
+              text: extractedData.header.title,
+              ...titleTextOptions
+            })
+          ]
         })
       );
     }
 
-    // Commercial contact if enabled
+    // Contact commercial avec style du template
     if (extractedData.header?.commercial_contact?.enabled) {
+      const contactStyle = templateStyles.header?.commercial || {};
+      const contactTextOptions = applyDetailedStyleToTextRun(contactStyle);
+      const contactParaOptions = applyDetailedStyleToParagraph(contactStyle);
+      
       sections.push(
         new Paragraph({
-          text: extractedData.header.commercial_contact.text || 'Contact Commercial',
-          alignment: AlignmentType.CENTER,
-          spacing: { after: 400 }
+          ...contactParaOptions,
+          children: [
+            new TextRun({
+              text: extractedData.header.commercial_contact.text || 'Contact Commercial',
+              ...contactTextOptions
+            })
+          ]
         })
       );
     }
 
-    // Skills section
+    // === COMPÉTENCES : Application des styles multi-niveaux ===
     if (extractedData.skills?.subcategories?.length > 0) {
+      // Titre de section "Compétences"
+      const sectionTitleStyle = templateStyles.competences?.sectionTitle || {};
+      const sectionTitleTextOptions = applyDetailedStyleToTextRun(sectionTitleStyle);
+      const sectionTitleParaOptions = applyDetailedStyleToParagraph(sectionTitleStyle);
+      
       sections.push(
         new Paragraph({
-          text: 'Compétences',
-          heading: HeadingLevel.HEADING_2,
-          spacing: { before: 400, after: 200 }
+          ...sectionTitleParaOptions,
+          children: [
+            new TextRun({
+              text: 'Compétences',
+              ...sectionTitleTextOptions
+            })
+          ]
         })
       );
 
+      // Catégories et items avec styles spécifiques
       extractedData.skills.subcategories.forEach((subcat: any) => {
+        const categoryStyle = templateStyles.competences?.category || {};
+        const itemStyle = templateStyles.competences?.item || {};
+        
+        const categoryTextOptions = applyDetailedStyleToTextRun(categoryStyle);
+        const itemTextOptions = applyDetailedStyleToTextRun(itemStyle);
+        const paraOptions = applyDetailedStyleToParagraph(categoryStyle);
+        
         sections.push(
           new Paragraph({
+            ...paraOptions,
             children: [
               new TextRun({
                 text: `${subcat.name}: `,
-                bold: true
+                ...categoryTextOptions
               }),
               new TextRun({
-                text: subcat.items.join(', ')
+                text: subcat.items.join(', '),
+                ...itemTextOptions
               })
-            ],
-            spacing: { after: 100 }
+            ]
           })
         );
       });
     }
 
-    // Experience section
+    // === EXPÉRIENCE : Application des styles pour missions ===
     if (extractedData.missions?.length > 0) {
+      // Titre de section "Expérience"
+      const sectionTitleStyle = templateStyles.experience?.sectionTitle || {};
+      const sectionTitleTextOptions = applyDetailedStyleToTextRun(sectionTitleStyle);
+      const sectionTitleParaOptions = applyDetailedStyleToParagraph(sectionTitleStyle);
+      
       sections.push(
         new Paragraph({
-          text: 'Expérience',
-          heading: HeadingLevel.HEADING_2,
-          spacing: { before: 400, after: 200 }
+          ...sectionTitleParaOptions,
+          children: [
+            new TextRun({
+              text: 'Expérience',
+              ...sectionTitleTextOptions
+            })
+          ]
         })
       );
 
       extractedData.missions.forEach((mission: any) => {
-        // Mission title
+        // Titre de mission avec style spécifique
+        const missionTitleStyle = templateStyles.experience?.missionTitle || {};
+        const missionTitleTextOptions = applyDetailedStyleToTextRun(missionTitleStyle);
+        const missionTitleParaOptions = applyDetailedStyleToParagraph(missionTitleStyle);
+        
         sections.push(
           new Paragraph({
+            ...missionTitleParaOptions,
             children: [
               new TextRun({
-                text: `${mission.date_start} - ${mission.date_end} `,
-                bold: true
-              }),
-              new TextRun({
-                text: `${mission.role} @ ${mission.client}`,
-                bold: true
+                text: `${mission.date_start} - ${mission.date_end} ${mission.role} @ ${mission.client}`,
+                ...missionTitleTextOptions
               })
-            ],
-            spacing: { after: 100 }
+            ]
           })
         );
 
-        // Location
+        // Lieu avec style
         if (mission.location) {
+          const locationStyle = templateStyles.experience?.location || {};
+          const locationTextOptions = applyDetailedStyleToTextRun(locationStyle);
+          const locationParaOptions = applyDetailedStyleToParagraph(locationStyle);
+          
           sections.push(
             new Paragraph({
-              text: `Lieu: ${mission.location}`,
-              spacing: { after: 100 }
+              ...locationParaOptions,
+              children: [
+                new TextRun({
+                  text: `Lieu: ${mission.location}`,
+                  ...locationTextOptions
+                })
+              ]
             })
           );
         }
 
-        // Context
+        // Contexte avec style
         if (mission.context) {
+          const contextStyle = templateStyles.experience?.context || {};
+          const contextTextOptions = applyDetailedStyleToTextRun(contextStyle);
+          const contextParaOptions = applyDetailedStyleToParagraph(contextStyle);
+          
           sections.push(
             new Paragraph({
-              text: `Contexte: ${mission.context}`,
-              spacing: { after: 100 }
+              ...contextParaOptions,
+              children: [
+                new TextRun({
+                  text: `Contexte: ${mission.context}`,
+                  ...contextTextOptions
+                })
+              ]
             })
           );
         }
 
-        // Achievements
+        // Réalisations avec style
         if (mission.achievements?.length > 0) {
+          const achievementStyle = templateStyles.experience?.achievements || {};
+          const achievementTextOptions = applyDetailedStyleToTextRun(achievementStyle);
+          const achievementParaOptions = applyDetailedStyleToParagraph(achievementStyle);
+          
           sections.push(
             new Paragraph({
-              text: 'Missions:',
-              spacing: { after: 50 }
+              ...achievementParaOptions,
+              children: [
+                new TextRun({
+                  text: 'Missions:',
+                  ...achievementTextOptions,
+                  bold: true
+                })
+              ]
             })
           );
+          
           mission.achievements.forEach((achievement: string) => {
             sections.push(
               new Paragraph({
-                text: `• ${achievement}`,
-                spacing: { after: 50 }
+                ...achievementParaOptions,
+                children: [
+                  new TextRun({
+                    text: `• ${achievement}`,
+                    ...achievementTextOptions
+                  })
+                ]
               })
             );
           });
         }
 
-        // Environment
+        // Environnement avec style
         if (mission.environment?.length > 0) {
+          const envStyle = templateStyles.experience?.environment || {};
+          const envTextOptions = applyDetailedStyleToTextRun(envStyle);
+          const envParaOptions = applyDetailedStyleToParagraph(envStyle);
+          
           sections.push(
             new Paragraph({
-              text: `Environnement: ${mission.environment.join(', ')}`,
-              spacing: { after: 200 }
+              ...envParaOptions,
+              children: [
+                new TextRun({
+                  text: `Environnement: ${mission.environment.join(', ')}`,
+                  ...envTextOptions
+                })
+              ]
             })
           );
         }
       });
     }
 
-    // Education section
+    // === FORMATIONS & CERTIFICATIONS : Application des styles ===
     if (extractedData.education?.length > 0) {
+      // Titre de section
+      const sectionTitleStyle = templateStyles.formations?.sectionTitle || {};
+      const sectionTitleTextOptions = applyDetailedStyleToTextRun(sectionTitleStyle);
+      const sectionTitleParaOptions = applyDetailedStyleToParagraph(sectionTitleStyle);
+      
       sections.push(
         new Paragraph({
-          text: 'Formations & Certifications',
-          heading: HeadingLevel.HEADING_2,
-          spacing: { before: 400, after: 200 }
+          ...sectionTitleParaOptions,
+          children: [
+            new TextRun({
+              text: 'Formations & Certifications',
+              ...sectionTitleTextOptions
+            })
+          ]
         })
       );
 
       extractedData.education.forEach((edu: any) => {
+        const eduStyle = templateStyles.formations?.item || {};
+        const eduTextOptions = applyDetailedStyleToTextRun(eduStyle);
+        const eduParaOptions = applyDetailedStyleToParagraph(eduStyle);
+        
         sections.push(
           new Paragraph({
+            ...eduParaOptions,
             children: [
               new TextRun({
                 text: `${edu.year} `,
+                ...eduTextOptions,
                 bold: true
               }),
               new TextRun({
-                text: edu.degree
+                text: edu.degree,
+                ...eduTextOptions
               })
-            ],
-            spacing: { after: 50 }
+            ]
           })
         );
 
         if (edu.institution || edu.location) {
           sections.push(
             new Paragraph({
-              text: `${edu.institution || ''}${edu.institution && edu.location ? ' - ' : ''}${edu.location || ''}`,
-              spacing: { after: 200 }
+              ...eduParaOptions,
+              children: [
+                new TextRun({
+                  text: `${edu.institution || ''}${edu.institution && edu.location ? ' - ' : ''}${edu.location || ''}`,
+                  ...eduTextOptions
+                })
+              ]
             })
           );
         }
       });
     }
 
-    // Footer
+    // === PIED DE PAGE ===
     if (extractedData.footer?.text) {
+      const footerStyle = templateStyles.footer || {};
+      const footerTextOptions = applyDetailedStyleToTextRun(footerStyle);
+      const footerParaOptions = applyDetailedStyleToParagraph(footerStyle);
+      
       sections.push(
         new Paragraph({
-          text: extractedData.footer.text,
-          alignment: AlignmentType.CENTER,
-          spacing: { before: 400 }
+          ...footerParaOptions,
+          children: [
+            new TextRun({
+              text: extractedData.footer.text,
+              ...footerTextOptions
+            })
+          ]
         })
       );
     }
 
-    // Create the document with proper margins
+    // Récupération des marges du template ou valeurs par défaut
+    const pageLayout = templateStructure?.pageLayout || {};
+    const margins = pageLayout.margins || {
+      top: '2.54cm',
+      right: '2cm',
+      bottom: '2.54cm',
+      left: '2cm'
+    };
+    
+    // Conversion cm -> twips pour docx
+    const cmToTwip = (cm: string): number => {
+      const num = parseFloat(cm.replace('cm', ''));
+      return Math.round(num * 567); // 1cm = 567 twips
+    };
+    
+    console.log('[generate-cv-word] Applying page margins:', margins);
+
+    // Create the document with template margins
     const doc = new Document({
       sections: [{
         properties: {
           page: {
             margin: {
-              top: convertInchesToTwip(1),
-              right: convertInchesToTwip(0.79),
-              bottom: convertInchesToTwip(1),
-              left: convertInchesToTwip(0.79)
+              top: cmToTwip(margins.top),
+              right: cmToTwip(margins.right),
+              bottom: cmToTwip(margins.bottom),
+              left: cmToTwip(margins.left)
             }
           }
         },
