@@ -126,6 +126,23 @@ serve(async (req: Request) => {
         let currentSection = '';
         let currentMission: StructuredData | null = null;
 
+        // Add this before line 123 (before the forEach)
+        const defaultStyle: Style = {
+          font: 'Segoe UI Symbol',
+          size: '11pt',
+          color: '#329696',
+          bold: false,
+          italic: false,
+          underline: null,
+          case: 'lowercase',
+          bullet: false,
+          alignment: 'left',
+          spacingBefore: '0pt',
+          spacingAfter: '6pt',
+          lineHeight: '1.15',
+          indent: '0pt'
+        };
+        
         paragraphs.forEach((p: any) => {
           const text = p.textContent.trim().replace(/^[•\-\*É°\u2022\u25CF]\s*/g, '');
           if (!text) return;
@@ -185,7 +202,7 @@ serve(async (req: Request) => {
               if (skillItems.length > 0) {
                 structuredData.push({
                   text: `${currentSubcategory}: ${skillItems.join(', ')}`,
-                  style: { ...style, bold: false, bullet: false },
+                  style: defaultStyle,
                   section: 'Compétences',
                   subcategory: currentSubcategory
                 });
