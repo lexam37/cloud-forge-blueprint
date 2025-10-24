@@ -9,7 +9,7 @@ const AuthComponent = () => {
         <h2 className="text-2xl font-bold mb-4 text-center">Connexion</h2>
         <Auth
           supabaseClient={supabase}
-          providers={['github']} // Inclut GitHub et Email
+          providers={['github']}
           appearance={{ theme: ThemeSupa }}
           localization={{
             variables: {

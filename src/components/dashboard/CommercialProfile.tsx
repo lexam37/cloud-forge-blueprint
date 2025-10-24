@@ -37,12 +37,14 @@ export const CommercialProfile = () => {
   const fetchProfile = async () => {
     setIsLoading(true);
     try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
       const { data, error } = await supabase
         .from('commercial_profiles')
         .select('*')
+        .eq('user_id', user.id)
         .eq('is_active', true)
-        .order('created_at', { ascending: false })
-        .limit(1)
         .maybeSingle();
 
       if (error) throw error;
@@ -81,12 +83,23 @@ export const CommercialProfile = () => {
     setIsSaving(true);
 
     try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        toast({
+          title: "Error",
+          description: "You must be logged in to save profile",
+          variant: "destructive"
+        });
+        return;
+      }
+
       if (profile) {
         // Update existing profile
         const { error } = await supabase
           .from('commercial_profiles')
           .update(formData)
-          .eq('id', profile.id);
+          .eq('id', profile.id)
+          .eq('user_id', user.id);
 
         if (error) throw error;
 
@@ -95,10 +108,13 @@ export const CommercialProfile = () => {
           description: "Vos coordonnées ont été mises à jour avec succès",
         });
       } else {
-        // Create new profile
+        // Create new profile with user_id
         const { error } = await supabase
           .from('commercial_profiles')
-          .insert(formData);
+          .insert({
+            ...formData,
+            user_id: user.id
+          });
 
         if (error) throw error;
 
@@ -149,6 +165,15 @@ export const CommercialProfile = () => {
     setIsUploadingLogo(true);
 
     try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        toast({
+          title: "Error",
+          description: "You must be logged in to upload logo",
+          variant: "destructive"
+        });
+        return;
+      }
       const timestamp = Date.now();
       const randomString = Math.random().toString(36).substring(7);
       const fileExt = file.name.split('.').pop();
@@ -167,7 +192,8 @@ export const CommercialProfile = () => {
         const { error: updateError } = await supabase
           .from('commercial_profiles')
           .update({ logo_path: filePath })
-          .eq('id', profile.id);
+          .eq('id', profile.id)
+          .eq('user_id', user.id);
 
         if (updateError) throw updateError;
       }
@@ -201,6 +227,16 @@ export const CommercialProfile = () => {
     if (!profile || !profile.logo_path) return;
 
     try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        toast({
+          title: "Error",
+          description: "You must be logged in to remove logo",
+          variant: "destructive"
+        });
+        return;
+      }
+
       // Supprimer du storage
       await supabase.storage
         .from('company-logos')
@@ -210,7 +246,8 @@ export const CommercialProfile = () => {
       const { error } = await supabase
         .from('commercial_profiles')
         .update({ logo_path: null })
-        .eq('id', profile.id);
+        .eq('id', profile.id)
+        .eq('user_id', user.id);
 
       if (error) throw error;
 

@@ -86,12 +86,18 @@ export const FileUploadSection = ({ onUploadSuccess }: FileUploadSectionProps) =
         throw new Error('Le fichier est trop volumineux (max 10 MB)');
       }
 
-      // Générer un nom de fichier unique
+      // Get current user for file path and database operations
+      const { data: { user }, error: userError } = await supabase.auth.getUser();
+      if (userError || !user) {
+        throw new Error('You must be logged in to upload files');
+      }
+
+      // Generate unique filename with user ID folder structure
       const fileExt = file.name.split('.').pop();
       const fileName = `${Date.now()}-${Math.random().toString(36).substring(7)}.${fileExt}`;
-      const filePath = fileName;
+      const filePath = `${user.id}/${fileName}`;
 
-      // Upload du fichier vers Supabase Storage
+      // Upload file to Supabase Storage
       const { error: uploadError } = await supabase.storage
         .from('cv-uploads')
         .upload(filePath, file);
@@ -113,10 +119,11 @@ export const FileUploadSection = ({ onUploadSuccess }: FileUploadSectionProps) =
       if (file.type === 'application/vnd.ms-powerpoint') fileType = 'ppt';
       if (file.type.includes('presentationml')) fileType = 'pptx';
 
-      // Créer l'enregistrement dans la base de données
+      // Create database record with user_id
       const { data: cvDoc, error: dbError } = await supabase
         .from('cv_documents')
         .insert({
+          user_id: user.id,
           original_file_path: filePath,
           original_file_name: file.name,
           original_file_type: fileType,

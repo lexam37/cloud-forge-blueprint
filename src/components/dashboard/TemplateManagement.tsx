@@ -32,10 +32,21 @@ export const TemplateManagement = () => {
   
     setIsLoading(true);
     try {
-      // Étape 1: Récupérer tous les templates de la table cv_templates
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        toast({
+          title: "Error",
+          description: "You must be logged in",
+          variant: "destructive"
+        });
+        return;
+      }
+
+      // Étape 1: Récupérer tous les templates de l'utilisateur
       const { data: templateDocs, error: fetchError } = await supabase
         .from('cv_templates')
-        .select('*');
+        .select('*')
+        .eq('user_id', user.id);
   
       if (fetchError) {
         console.error('Erreur lors de la récupération des templates:', fetchError);
@@ -60,7 +71,8 @@ export const TemplateManagement = () => {
           const { error: dbError } = await supabase
             .from('cv_templates')
             .delete()
-            .eq('id', template.id);
+            .eq('id', template.id)
+            .eq('user_id', user.id);
   
           if (dbError) {
             console.error(`Erreur suppression DB pour template ${template.id}:`, dbError);
@@ -104,9 +116,13 @@ export const TemplateManagement = () => {
   const fetchTemplates = async () => {
     setIsLoading(true);
     try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
       const { data, error } = await supabase
         .from('cv_templates')
         .select('*')
+        .eq('user_id', user.id)
         .order('created_at', { ascending: false });
 
       if (error) throw error;
@@ -130,6 +146,16 @@ export const TemplateManagement = () => {
     setIsUploading(true);
 
     try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        toast({
+          title: "Error",
+          description: "You must be logged in to upload templates",
+          variant: "destructive"
+        });
+        return;
+      }
+
       // Vérifier le type de fichier - supporter .doc, .docx, .pdf, .ppt, .pptx
       const allowedTypes = [
         'application/pdf',
@@ -143,9 +169,9 @@ export const TemplateManagement = () => {
         throw new Error('Format non supporté. Utilisez .doc, .docx, .pdf, .ppt ou .pptx');
       }
 
-      // Upload du fichier
+      // Upload file with user ID folder structure
       const fileExt = file.name.split('.').pop();
-      const fileName = `template-${Date.now()}.${fileExt}`;
+      const fileName = `${user.id}/template-${Date.now()}.${fileExt}`;
 
       const { error: uploadError } = await supabase.storage
         .from('cv-templates')
@@ -160,10 +186,11 @@ export const TemplateManagement = () => {
       if (file.type === 'application/vnd.ms-powerpoint') fileType = 'ppt';
       if (file.type.includes('presentationml')) fileType = 'pptx';
 
-      // Créer l'enregistrement
+      // Create template record with user_id
       const { data: template, error: dbError } = await supabase
         .from('cv_templates')
         .insert({
+          user_id: user.id,
           name: file.name,
           file_path: fileName,
           file_type: fileType,
@@ -238,6 +265,16 @@ export const TemplateManagement = () => {
     setDeletingId(templateId);
 
     try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        toast({
+          title: "Error",
+          description: "You must be logged in to delete templates",
+          variant: "destructive"
+        });
+        return;
+      }
+
       // Supprimer du storage
       const { error: storageError } = await supabase.storage
         .from('cv-templates')
@@ -249,7 +286,8 @@ export const TemplateManagement = () => {
       const { error: dbError } = await supabase
         .from('cv_templates')
         .delete()
-        .eq('id', templateId);
+        .eq('id', templateId)
+        .eq('user_id', user.id);
 
       if (dbError) throw dbError;
 
