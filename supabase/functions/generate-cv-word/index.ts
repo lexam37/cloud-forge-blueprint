@@ -295,18 +295,60 @@ serve(async (req: Request) => {
     
     /**
      * Remplace le contenu d'une section en trouvant son titre
+     * NOUVELLE APPROCHE : Identifier la section et remplacer tout son contenu jusqu'à la prochaine section
      */
     function replaceSectionContent(xml: string, sectionTitle: string, newContent: string): string {
-      // Trouver le paragraphe contenant le titre de section
-      const escapedTitle = sectionTitle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const sectionRegex = new RegExp(`(<w:t[^>]*>)(${escapedTitle})(<\/w:t>[\\s\\S]*?<\/w:p>)([\\s\\S]*?)(?=<w:p[^>]*><w:pPr><w:pStyle w:val="(?:Heading|Titre))`, 'i');
+      console.log('[replaceSectionContent] Searching for section:', sectionTitle);
       
-      if (sectionRegex.test(xml)) {
-        return xml.replace(sectionRegex, `$1$2$3${newContent}`);
+      // Échapper les caractères spéciaux dans le titre
+      const escapedTitle = sectionTitle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      
+      // ÉTAPE 1 : Trouver le paragraphe contenant le titre de section
+      // On cherche <w:t>TitreSection</w:t> dans n'importe quel paragraphe
+      const titleRegex = new RegExp(`(<w:p[^>]*>(?:[\\s\\S]*?)<w:t[^>]*>)(${escapedTitle})(<\/w:t>(?:[\\s\\S]*?)<\/w:p>)`, 'i');
+      const titleMatch = titleRegex.exec(xml);
+      
+      if (!titleMatch) {
+        console.warn('[replaceSectionContent] Could not find section title:', sectionTitle);
+        return xml;
       }
       
-      console.warn('[replaceSectionContent] Could not find section:', sectionTitle);
-      return xml;
+      console.log('[replaceSectionContent] Found section title at position:', titleMatch.index);
+      
+      // ÉTAPE 2 : Trouver la fin de cette section
+      // La fin = le prochain paragraphe qui contient un titre de grande taille OU la fin du document
+      const afterTitle = xml.substring(titleMatch.index + titleMatch[0].length);
+      
+      // Chercher le prochain titre de section (paragraphe avec une taille de police ≥ 14pt ou style Heading)
+      // Ou chercher des patterns de titre communs : "Compétences", "Expérience", "Formations"
+      const nextSectionRegex = /<w:p[^>]*>(?:[\\s\\S]*?)<w:t[^>]*>(?:Compétences|Expérience|Formations|Formation|Certifications|Langues|Projets|Éducation|Contact|Profil)<\/w:t>(?:[\\s\\S]*?)<\/w:p>/i;
+      const nextSectionMatch = nextSectionRegex.exec(afterTitle);
+      
+      let sectionEndIndex;
+      if (nextSectionMatch) {
+        sectionEndIndex = titleMatch.index + titleMatch[0].length + nextSectionMatch.index;
+        console.log('[replaceSectionContent] Found next section at position:', sectionEndIndex);
+      } else {
+        // Pas de prochaine section = aller jusqu'à la fin du body
+        const bodyEndMatch = /<\/w:body>/.exec(xml);
+        sectionEndIndex = bodyEndMatch ? bodyEndMatch.index : xml.length;
+        console.log('[replaceSectionContent] No next section found, using end of body:', sectionEndIndex);
+      }
+      
+      // ÉTAPE 3 : Construire le nouveau XML
+      const beforeSection = xml.substring(0, titleMatch.index + titleMatch[0].length);
+      const afterSection = xml.substring(sectionEndIndex);
+      
+      const result = beforeSection + '\n' + newContent + '\n' + afterSection;
+      
+      console.log('[replaceSectionContent] Successfully replaced section:', sectionTitle);
+      console.log('[replaceSectionContent] Content length:', {
+        before: titleMatch.index,
+        newContent: newContent.length,
+        after: xml.length - sectionEndIndex
+      });
+      
+      return result;
     }
     
     /**
