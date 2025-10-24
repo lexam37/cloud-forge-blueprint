@@ -136,7 +136,10 @@ serve(async (req: Request) => {
     });
 
     const { data: generateData, error: generateError } = await supabase.functions.invoke('generate-cv-word', {
-      body: { cvDocumentId }
+      body: { cvDocumentId },
+      headers: {
+        Authorization: `Bearer ${jwt}`
+      }
     });
 
     if (generateError) {
