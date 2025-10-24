@@ -127,26 +127,37 @@ serve(async (req: Request) => {
 
     console.log('Fetching CV document and template for user:', user.id);
 
+    // Récupérer le CV document
     const { data: cvDoc, error: cvError } = await supabase
       .from('cv_documents')
-      .select('*, cv_templates(structure_data)')
+      .select('*')
       .eq('id', cvDocumentId)
       .eq('user_id', user.id)
       .single();
 
     if (cvError || !cvDoc) throw new Error('CV document not found or not owned by user');
 
-    // Logs de débogage pour comprendre la structure récupérée
-    console.log('[generate-cv-word] cvDoc.cv_templates type:', typeof cvDoc.cv_templates);
-    console.log('[generate-cv-word] cvDoc.cv_templates is array:', Array.isArray(cvDoc.cv_templates));
-    console.log('[generate-cv-word] cvDoc.cv_templates:', JSON.stringify(cvDoc.cv_templates)?.substring(0, 500));
-
     const extractedData = cvDoc.extracted_data;
     
-    // Fix: cv_templates peut être un tableau ou un objet selon la relation
-    const templateStructure = Array.isArray(cvDoc.cv_templates) 
-      ? cvDoc.cv_templates[0]?.structure_data 
-      : cvDoc.cv_templates?.structure_data;
+    // Récupérer le template associé via template_id
+    let templateStructure = null;
+    if (cvDoc.template_id) {
+      console.log('[generate-cv-word] Fetching template:', cvDoc.template_id);
+      const { data: template, error: templateError } = await supabase
+        .from('cv_templates')
+        .select('structure_data')
+        .eq('id', cvDoc.template_id)
+        .single();
+      
+      if (!templateError && template) {
+        templateStructure = template.structure_data;
+        console.log('[generate-cv-word] Template loaded successfully');
+      } else {
+        console.warn('[generate-cv-word] Failed to load template:', templateError);
+      }
+    } else {
+      console.warn('[generate-cv-word] No template_id in CV document');
+    }
 
     console.log('[generate-cv-word] templateStructure exists:', !!templateStructure);
     console.log('[generate-cv-word] templateStructure.detailedStyles exists:', !!templateStructure?.detailedStyles);
