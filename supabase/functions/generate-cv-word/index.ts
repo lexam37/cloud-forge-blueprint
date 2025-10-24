@@ -234,45 +234,66 @@ ${chunk.xml}
 
 Réponds UNIQUEMENT avec le XML modifié, sans texte supplémentaire.`;
 
-    const aiResponse = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${LOVABLE_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'google/gemini-2.5-pro',
-        messages: [
-          {
-            role: 'system',
-            content: 'Tu es un expert en XML Word. Réponds UNIQUEMENT avec du XML valide, sans commentaires ni texte explicatif.'
-          },
-          {
-            role: 'user',
-            content: chunkPrompt
-          }
-        ],
-        temperature: 0.1,
-        max_tokens: 8000
-      }),
-    });
+    try {
+      const aiResponse = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${LOVABLE_API_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: 'google/gemini-2.5-flash', // Utiliser flash pour économiser des tokens
+          messages: [
+            {
+              role: 'system',
+              content: 'Tu es un expert en XML Word. Réponds UNIQUEMENT avec du XML valide, sans commentaires ni texte explicatif.'
+            },
+            {
+              role: 'user',
+              content: chunkPrompt
+            }
+          ],
+          temperature: 0.1,
+          max_tokens: 8000
+        }),
+      });
 
-    if (!aiResponse.ok) {
-      const errorText = await aiResponse.text();
-      console.error('[generateCVWithAIXML] AI error:', aiResponse.status, errorText);
-      continue; // Passer au chunk suivant
+      if (!aiResponse.ok) {
+        const errorText = await aiResponse.text();
+        console.error('[generateCVWithAIXML] AI error:', aiResponse.status, errorText);
+        console.error('[generateCVWithAIXML] Skipping chunk due to error');
+        continue; // Passer au chunk suivant
+      }
+
+      // Vérifier que la réponse n'est pas vide
+      const responseText = await aiResponse.text();
+      if (!responseText || responseText.trim() === '') {
+        console.error('[generateCVWithAIXML] Empty response from AI');
+        continue;
+      }
+
+      // Parser le JSON
+      const aiResult = JSON.parse(responseText);
+      
+      if (!aiResult.choices?.[0]?.message?.content) {
+        console.error('[generateCVWithAIXML] No content in AI response');
+        continue;
+      }
+
+      let modifiedChunk = aiResult.choices[0].message.content;
+      
+      // Nettoyer la réponse (enlever les markdown si présents)
+      modifiedChunk = modifiedChunk.replace(/```xml\n?/g, '').replace(/```\n?/g, '').trim();
+      
+      // Remplacer le chunk original par le chunk modifié
+      modifiedXml = modifiedXml.replace(chunk.xml, modifiedChunk);
+      
+      console.log(`[generateCVWithAIXML] Chunk ${i + 1} processed`);
+    } catch (error) {
+      console.error(`[generateCVWithAIXML] Error processing chunk ${i + 1}:`, error);
+      console.error('[generateCVWithAIXML] Skipping chunk and continuing...');
+      // Continue avec le chunk suivant sans modifier le XML
     }
-
-    const aiResult = await aiResponse.json();
-    let modifiedChunk = aiResult.choices[0].message.content;
-    
-    // Nettoyer la réponse (enlever les markdown si présents)
-    modifiedChunk = modifiedChunk.replace(/```xml\n?/g, '').replace(/```\n?/g, '').trim();
-    
-    // Remplacer le chunk original par le chunk modifié
-    modifiedXml = modifiedXml.replace(chunk.xml, modifiedChunk);
-    
-    console.log(`[generateCVWithAIXML] Chunk ${i + 1} processed`);
   }
 
   console.log('[generateCVWithAIXML] AI processing complete, rebuilding document...');
