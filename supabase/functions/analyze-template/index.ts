@@ -86,7 +86,7 @@ serve(async (req: Request) => {
       throw new Error(`Failed to download file: ${fileError?.message}`);
     }
 
-    console.log('[analyze-template] Starting XML-based analysis...');
+    console.log('[analyze-template] Starting enhanced XML analysis...');
     const structureData = await analyzeTemplateStructure(fileData, templateId, supabase, user.id);
     console.log('[analyze-template] Analysis complete');
 
@@ -117,7 +117,59 @@ serve(async (req: Request) => {
 });
 
 /**
- * Parse le XML d'un fichier DOCX pour extraire les styles réels
+ * Parse les styles définis dans styles.xml
+ */
+function parseStylesXml(stylesXml: string): Map<string, any> {
+  const stylesMap = new Map<string, any>();
+  
+  const styleRegex = /<w:style[^>]*w:styleId="([^"]+)"[^>]*>([\s\S]*?)<\/w:style>/g;
+  let styleMatch;
+  
+  while ((styleMatch = styleRegex.exec(stylesXml)) !== null) {
+    const styleId = styleMatch[1];
+    const styleContent = styleMatch[2];
+    
+    // Extraire les propriétés de run (rPr)
+    const rPrMatch = styleContent.match(/<w:rPr>([\s\S]*?)<\/w:rPr>/);
+    const rPr = rPrMatch ? rPrMatch[1] : '';
+    
+    // Extraire les propriétés de paragraphe (pPr)
+    const pPrMatch = styleContent.match(/<w:pPr>([\s\S]*?)<\/w:pPr>/);
+    const pPr = pPrMatch ? pPrMatch[1] : '';
+    
+    // Parser les polices
+    const fontMatch = rPr.match(/<w:rFonts[^>]*(?:w:ascii="([^"]+)"|w:hAnsi="([^"]+)"|w:cs="([^"]+)")[^>]*>/);
+    const font = fontMatch ? (fontMatch[1] || fontMatch[2] || fontMatch[3]) : null;
+    
+    // Parser la taille
+    const szMatch = rPr.match(/<w:sz w:val="(\d+)"/);
+    const size = szMatch ? parseInt(szMatch[1]) / 2 : null;
+    
+    // Parser la couleur
+    const colorMatch = rPr.match(/<w:color w:val="([^"]+)"/);
+    const color = colorMatch ? colorMatch[1] : null;
+    
+    // Parser gras/italique
+    const bold = /<w:b\b/.test(rPr);
+    const italic = /<w:i\b/.test(rPr);
+    
+    stylesMap.set(styleId, {
+      font,
+      size,
+      color,
+      bold,
+      italic,
+      rPr,
+      pPr
+    });
+  }
+  
+  console.log(`[parseStylesXml] Parsed ${stylesMap.size} style definitions`);
+  return stylesMap;
+}
+
+/**
+ * Parse le XML d'un fichier DOCX avec support des styles définis
  */
 async function analyzeTemplateStructure(fileData: Blob, templateId: string, supabase: any, userId: string) {
   console.log('[analyzeTemplateStructure] Extracting DOCX XML...');
@@ -126,10 +178,14 @@ async function analyzeTemplateStructure(fileData: Blob, templateId: string, supa
   const zip = await JSZip.loadAsync(arrayBuffer);
   
   const documentXml = await zip.file('word/document.xml')?.async('text');
+  const stylesXml = await zip.file('word/styles.xml')?.async('text');
   
   if (!documentXml) throw new Error('Could not extract document.xml from DOCX');
   
-  console.log('[analyzeTemplateStructure] Parsing XML structure...');
+  // Parser les styles définis
+  const stylesMap = stylesXml ? parseStylesXml(stylesXml) : new Map();
+  
+  console.log('[analyzeTemplateStructure] Parsing document structure...');
   
   const extractedContent: any[] = [];
   
@@ -155,34 +211,64 @@ async function analyzeTemplateStructure(fileData: Blob, templateId: string, supa
     const pPrMatch = paragraphContent.match(/<w:pPr>([\s\S]*?)<\/w:pPr>/);
     const pPr = pPrMatch ? pPrMatch[1] : '';
     
-    // Extraire les propriétés de run (première occurrence pour le style principal)
-    const rPrMatch = paragraphContent.match(/<w:rPr>([\s\S]*?)<\/w:rPr>/);
-    const rPr = rPrMatch ? rPrMatch[1] : '';
+    // Chercher le style appliqué
+    const styleIdMatch = pPr.match(/<w:pStyle w:val="([^"]+)"/);
+    const styleId = styleIdMatch ? styleIdMatch[1] : null;
+    const definedStyle = styleId ? stylesMap.get(styleId) : null;
+    
+    // Extraire les propriétés de run (combiner style défini + override local)
+    const runs = paragraphContent.match(/<w:r\b[^>]*>([\s\S]*?)<\/w:r>/g);
+    let firstRunRPr = '';
+    if (runs && runs.length > 0) {
+      const firstRun = runs[0];
+      const rPrMatch = firstRun.match(/<w:rPr>([\s\S]*?)<\/w:rPr>/);
+      firstRunRPr = rPrMatch ? rPrMatch[1] : '';
+    }
+    
+    // Combiner style défini + override
+    const combinedRPr = (definedStyle?.rPr || '') + firstRunRPr;
     
     // Parser les styles de caractère
-    const isBold = /<w:b\b/.test(rPr);
-    const isItalic = /<w:i\b/.test(rPr);
-    const isUnderline = /<w:u\b/.test(rPr);
-    const isStrike = /<w:strike\b/.test(rPr);
+    const isBold = /<w:b\b/.test(combinedRPr) || definedStyle?.bold || false;
+    const isItalic = /<w:i\b/.test(combinedRPr) || definedStyle?.italic || false;
+    const isUnderline = /<w:u\b/.test(combinedRPr);
+    const isStrike = /<w:strike\b/.test(combinedRPr);
     
-    // Taille de police (en demi-points, donc diviser par 2)
-    const szMatch = rPr.match(/<w:sz w:val="(\d+)"/);
-    const fontSize = szMatch ? `${parseInt(szMatch[1]) / 2}pt` : '11pt';
+    // Taille de police (local > defined > default)
+    let fontSize = '11pt';
+    const localSzMatch = combinedRPr.match(/<w:sz w:val="(\d+)"/);
+    if (localSzMatch) {
+      fontSize = `${parseInt(localSzMatch[1]) / 2}pt`;
+    } else if (definedStyle?.size) {
+      fontSize = `${definedStyle.size}pt`;
+    }
     
-    // Police
-    const fontMatch = rPr.match(/<w:rFonts[^>]*w:ascii="([^"]+)"/);
-    const fontFamily = fontMatch ? fontMatch[1] : 'Calibri';
+    // Police (local > defined > default)
+    let fontFamily = 'Calibri';
+    const localFontMatch = combinedRPr.match(/<w:rFonts[^>]*(?:w:ascii="([^"]+)"|w:hAnsi="([^"]+)"|w:cs="([^"]+)")[^>]*>/);
+    if (localFontMatch) {
+      fontFamily = localFontMatch[1] || localFontMatch[2] || localFontMatch[3] || 'Calibri';
+    } else if (definedStyle?.font) {
+      fontFamily = definedStyle.font;
+    }
     
-    // Couleur (format hexadécimal dans le XML)
-    const colorMatch = rPr.match(/<w:color w:val="([^"]+)"/);
+    // Couleur (local > defined > default)
     let color = '#000000';
-    if (colorMatch) {
-      const colorVal = colorMatch[1];
+    const localColorMatch = combinedRPr.match(/<w:color w:val="([^"]+)"/);
+    if (localColorMatch) {
+      const colorVal = localColorMatch[1];
       color = colorVal.toLowerCase() === 'auto' ? '#000000' : `#${colorVal}`;
+    } else if (definedStyle?.color && definedStyle.color !== 'auto') {
+      color = `#${definedStyle.color}`;
+    }
+    
+    // Log pour debug des 5 premiers éléments
+    if (index < 5) {
+      console.log(`[analyzeTemplateStructure] Element ${index}: "${text.substring(0, 50)}" | Font: ${fontFamily} | Size: ${fontSize} | Color: ${color} | Bold: ${isBold}`);
     }
     
     // Soulignement
-    const underlineTypeMatch = rPr.match(/<w:u w:val="([^"]+)"/);
+    const underlineTypeMatch = combinedRPr.match(/<w:u w:val="([^"]+)"/);
     const underline = isUnderline && underlineTypeMatch ? {
       type: underlineTypeMatch[1],
       color: color
@@ -190,15 +276,15 @@ async function analyzeTemplateStructure(fileData: Blob, templateId: string, supa
     
     // Casse du texte
     let textCase: 'uppercase' | 'lowercase' | 'mixed' | 'capitalize' = 'mixed';
-    const capsMatch = rPr.match(/<w:caps\b/);
-    const smallCapsMatch = rPr.match(/<w:smallCaps\b/);
+    const capsMatch = combinedRPr.match(/<w:caps\b/);
     if (capsMatch) textCase = 'uppercase';
     else if (text === text.toUpperCase() && text !== text.toLowerCase()) textCase = 'uppercase';
     else if (text === text.toLowerCase()) textCase = 'lowercase';
     else if (text.match(/^[A-ZÀ-Ý][a-zà-ÿ]/)) textCase = 'capitalize';
     
     // Alignement de paragraphe
-    const alignMatch = pPr.match(/<w:jc w:val="([^"]+)"/);
+    const combinedPPr = (definedStyle?.pPr || '') + pPr;
+    const alignMatch = combinedPPr.match(/<w:jc w:val="([^"]+)"/);
     let alignment: 'left' | 'center' | 'right' | 'justify' = 'left';
     if (alignMatch) {
       const alignVal = alignMatch[1];
@@ -207,37 +293,37 @@ async function analyzeTemplateStructure(fileData: Blob, templateId: string, supa
       else if (alignVal === 'both') alignment = 'justify';
     }
     
-    // Espacements (en twips, 1 twip = 1/20 pt, donc diviser par 20)
-    const spacingMatch = pPr.match(/<w:spacing[^>]*w:before="(\d+)"[^>]*w:after="(\d+)"/);
+    // Espacements (en twips, 1 twip = 1/20 pt)
+    const spacingMatch = combinedPPr.match(/<w:spacing[^>]*w:before="(\d+)"[^>]*w:after="(\d+)"/);
     const spacingBefore = spacingMatch ? `${parseInt(spacingMatch[1]) / 20}pt` : '0pt';
     const spacingAfter = spacingMatch ? `${parseInt(spacingMatch[2]) / 20}pt` : '0pt';
     
     // Interligne
-    const lineMatch = pPr.match(/<w:spacing[^>]*w:line="(\d+)"/);
+    const lineMatch = combinedPPr.match(/<w:spacing[^>]*w:line="(\d+)"/);
     const lineHeight = lineMatch ? `${parseInt(lineMatch[1]) / 240}` : '1.15';
     
     // Retraits (en twips)
-    const indMatch = pPr.match(/<w:ind[^>]*w:left="(\d+)"/);
+    const indMatch = combinedPPr.match(/<w:ind[^>]*w:left="(\d+)"/);
     const indent = indMatch ? `${parseInt(indMatch[1]) / 20}pt` : '0pt';
     
-    const firstLineIndMatch = pPr.match(/<w:ind[^>]*w:firstLine="(\d+)"/);
+    const firstLineIndMatch = combinedPPr.match(/<w:ind[^>]*w:firstLine="(\d+)"/);
     const firstLineIndent = firstLineIndMatch ? `${parseInt(firstLineIndMatch[1]) / 20}pt` : '0pt';
     
     // Puces et numérotation
-    const numPrMatch = pPr.match(/<w:numPr>/);
+    const numPrMatch = combinedPPr.match(/<w:numPr>/);
     const isList = numPrMatch !== null;
     let bulletStyle: string | null = null;
     if (isList) {
-      const numIdMatch = pPr.match(/<w:numId w:val="(\d+)"/);
+      const numIdMatch = combinedPPr.match(/<w:numId w:val="(\d+)"/);
       bulletStyle = numIdMatch ? 'bullet' : 'custom';
     }
     
-    // Bordures (simplifiées)
-    const hasBorder = /<w:pBdr>/.test(pPr);
+    // Bordures
+    const hasBorder = /<w:pBdr>/.test(combinedPPr);
     const borderColor = hasBorder ? color : null;
     
     // Fond/ombrage
-    const shadingMatch = pPr.match(/<w:shd[^>]*w:fill="([^"]+)"/);
+    const shadingMatch = combinedPPr.match(/<w:shd[^>]*w:fill="([^"]+)"/);
     const backgroundColor = shadingMatch ? `#${shadingMatch[1]}` : null;
     
     extractedContent.push({
@@ -283,7 +369,6 @@ async function analyzeTemplateStructure(fileData: Blob, templateId: string, supa
   
   for (let i = 0; i < Math.min(15, extractedContent.length); i++) {
     const text = extractedContent[i].text.toLowerCase().trim();
-    // Détecter les titres de section (courts, souvent en gras)
     if (sectionStarters.some(starter => text.includes(starter)) && text.length < 60) {
       headerEndIndex = i;
       console.log(`[analyzeTemplateStructure] Header ends at index ${i}, detected: "${extractedContent[i].text}"`);
@@ -312,10 +397,9 @@ async function analyzeTemplateStructure(fileData: Blob, templateId: string, supa
     const text = extractedContent[i].text.toLowerCase().trim();
     const origText = extractedContent[i].text.trim();
     
-    // Vérifier si c'est un titre de section (court, souvent en gras ou taille différente)
-    if (origText.length < 60 && extractedContent[i].style.bold) {
+    // Section = texte court avec un mot-clé
+    if (origText.length < 60) {
       for (const [sectionName, keywords] of Object.entries(sectionKeywords)) {
-        // Vérifier si le texte contient un mot-clé ET n'est pas déjà détecté
         if (keywords.some(kw => text.includes(kw)) && !sections.find(s => s.name === sectionName)) {
           sections.push({
             name: sectionName,
@@ -358,15 +442,11 @@ async function analyzeTemplateStructure(fileData: Blob, templateId: string, supa
       if (!item) continue;
       const text = item.text.trim();
       
-      // Catégories : texte court avec ":" ou en gras
       if ((text.includes(':') || item.style.bold) && text.length < 50 && !text.includes(',')) {
         skillCategoryStyles.push(item.style);
-        console.log(`[analyzeTemplateStructure] Skill category detected: ${text.substring(0, 40)}`);
-      }
-      // Items : texte avec virgules ou liste
-      else if (text.includes(',') || item.style.bullet) {
+        console.log(`[analyzeTemplateStructure] Skill category: "${text.substring(0, 40)}"`);
+      } else if (text.includes(',') || item.style.bullet) {
         skillItemStyles.push(item.style);
-        console.log(`[analyzeTemplateStructure] Skill items detected: ${text.substring(0, 40)}`);
       }
     }
   } else {
@@ -382,25 +462,15 @@ async function analyzeTemplateStructure(fileData: Blob, templateId: string, supa
       const text = item.text.trim();
       const textLower = text.toLowerCase();
       
-      // Titre de mission : contient des dates et "@"
       if (/\d{2}\/\d{4}/.test(text) && (text.includes('@') || text.includes('-'))) {
         missionTitleStyles.push(item.style);
-        console.log(`[analyzeTemplateStructure] Mission title detected: ${text.substring(0, 50)}`);
-      }
-      // Contexte : ligne avec "contexte" ou paragraphe descriptif après titre
-      else if (textLower.includes('contexte') || textLower.includes('description')) {
+        console.log(`[analyzeTemplateStructure] Mission title: "${text.substring(0, 50)}"`);
+      } else if (textLower.includes('contexte') || textLower.includes('description')) {
         missionContextStyles.push(item.style);
-        console.log(`[analyzeTemplateStructure] Mission context detected`);
-      }
-      // Environnement : ligne avec "environnement" ou "technologies"
-      else if (textLower.includes('environnement') || textLower.includes('technologie') || textLower.includes('stack')) {
+      } else if (textLower.includes('environnement') || textLower.includes('technologie')) {
         missionEnvironmentStyles.push(item.style);
-        console.log(`[analyzeTemplateStructure] Mission environment detected`);
-      }
-      // Réalisations : lignes avec puces
-      else if (item.style.bullet) {
+      } else if (item.style.bullet) {
         missionAchievementStyles.push(item.style);
-        console.log(`[analyzeTemplateStructure] Mission achievement detected (bullet)`);
       }
     }
   } else {
@@ -409,16 +479,12 @@ async function analyzeTemplateStructure(fileData: Blob, templateId: string, supa
   
   const formationSection = sections.find(s => s.name === 'Formations & Certifications');
   if (formationSection) {
-    console.log(`[analyzeTemplateStructure] Analyzing Formations section (${formationSection.startIndex} to ${formationSection.endIndex})`);
     for (let i = formationSection.startIndex + 1; i < Math.min(formationSection.endIndex, formationSection.startIndex + 20); i++) {
       const item = extractedContent[i];
       if (item && item.text.trim().length > 3) {
         educationItemStyles.push(item.style);
-        console.log(`[analyzeTemplateStructure] Education item detected: ${item.text.substring(0, 40)}`);
       }
     }
-  } else {
-    console.warn('[analyzeTemplateStructure] Formations section NOT found');
   }
 
   console.log('[analyzeTemplateStructure] Normalizing styles...');
