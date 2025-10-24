@@ -154,7 +154,13 @@ serve(async (req: Request) => {
       
       return generatedBuffer;
     }
-    
+
+    const generatedBuffer = await generateCVWithJSZip(
+      templateBuffer,
+      extractedData,
+      template.structure_data
+    );
+      
     console.log('[generate-cv-word] CV generated successfully');
 
     // Upload du fichier généré
