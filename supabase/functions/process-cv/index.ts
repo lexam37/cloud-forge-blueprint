@@ -46,10 +46,24 @@ serve(async (req: Request) => {
 
     const startTime = Date.now();
 
-    // Récupération du document CV et du template associé
+    // Récupération du template actif pour ce traitement
+    const { data: activeTemplate, error: templateError } = await supabase
+      .from('cv_templates')
+      .select('id, structure_data')
+      .eq('is_active', true)
+      .eq('user_id', user.id)
+      .single();
+
+    if (templateError || !activeTemplate) {
+      console.warn('[process-cv] No active template found, proceeding without template structure');
+    }
+
+    console.log('[process-cv] Active template:', activeTemplate?.id || 'none');
+
+    // Récupération du document CV
     const { data: cvDoc, error: cvError } = await supabase
       .from('cv_documents')
-      .select('*, cv_templates(structure_data)')
+      .select('*')
       .eq('id', cvDocumentId)
       .eq('user_id', user.id)
       .single();
@@ -58,7 +72,7 @@ serve(async (req: Request) => {
       throw new Error('CV document not found or not owned by user');
     }
 
-    const templateStructure = cvDoc.cv_templates?.structure_data || {};
+    const templateStructure = activeTemplate?.structure_data || {};
     
     console.log('[process-cv] Starting CV extraction...');
     await supabase.from('processing_logs').insert({
@@ -101,12 +115,13 @@ serve(async (req: Request) => {
 
     console.log('[process-cv] AI processing complete');
 
-    // Sauvegarde des résultats
+    // Sauvegarde des résultats avec le template_id
     const processingTime = Date.now() - startTime;
     await supabase
       .from('cv_documents')
       .update({ 
         extracted_data: extractedData,
+        template_id: activeTemplate?.id || null,
         status: 'processed',
         processing_time_ms: processingTime
       })
