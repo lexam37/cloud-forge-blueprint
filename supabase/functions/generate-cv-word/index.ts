@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.75.0";
 import { z } from "https://deno.land/x/zod@v3.21.4/mod.ts";
+import JSZip from "https://esm.sh/jszip@3.10.1";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -98,9 +99,61 @@ serve(async (req: Request) => {
     const templateBuffer = await templateFile.arrayBuffer();
     console.log('[generate-cv-word] Template downloaded, size:', templateBuffer.byteLength, 'bytes');
 
-    // Générer le CV (copie simple du template pour l'instant)
-    // TODO: Implémenter la génération avec docx library
-    const generatedBuffer = new Uint8Array(templateBuffer);
+    async function generateCVWithJSZip(
+      templateBuffer: ArrayBuffer,
+      cvData: any,
+      templateStructure: any
+    ) {
+      console.log('[generateCVWithJSZip] Starting...');
+      
+      const zip = new JSZip();
+      await zip.loadAsync(templateBuffer);
+      
+      // Extraire document.xml
+      const docXml = await zip.file("word/document.xml")?.async("string");
+      if (!docXml) throw new Error("Cannot extract document.xml from template");
+      
+      console.log('[generateCVWithJSZip] Extracted document.xml, length:', docXml.length);
+      
+      // Remplacer le trigramme
+      let modifiedXml = docXml.replace(
+        /CVA|Trigramme|XXX/g, 
+        cvData.header?.trigram || 'XXX'
+      );
+      
+      // Remplacer le titre
+      modifiedXml = modifiedXml.replace(
+        /Analyste Fonctionnel \/ Product Owner|Titre du poste/g,
+        cvData.header?.title || 'Poste'
+      );
+      
+      // Remplacer les compétences (simple remplacement pour démarrer)
+      if (cvData.skills?.subcategories) {
+        const competencesText = cvData.skills.subcategories
+          .map((cat: any) => `${cat.name}: ${cat.items.join(', ')}`)
+          .join('\n');
+        
+        modifiedXml = modifiedXml.replace(
+          /<w:t>Langage\/BDD:.*?<\/w:t>/g,
+          `<w:t>${competencesText}</w:t>`
+        );
+      }
+      
+      console.log('[generateCVWithJSZip] Replacements done');
+      
+      // Réinsérer le XML modifié
+      zip.file("word/document.xml", modifiedXml);
+      
+      // Générer le nouveau fichier
+      const generatedBuffer = await zip.generateAsync({ 
+        type: "uint8array",
+        compression: "DEFLATE"
+      });
+      
+      console.log('[generateCVWithJSZip] Generated buffer size:', generatedBuffer.length);
+      
+      return generatedBuffer;
+    }
     
     console.log('[generate-cv-word] CV generated successfully');
 
