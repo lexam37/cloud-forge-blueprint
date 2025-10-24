@@ -64,17 +64,23 @@ serve(async (req: Request) => {
         throw new Error('Template not found');
       }
 
-      // Télécharger le template
+      console.log('[generate-cv-word] Template structure_data:', JSON.stringify(template.structure_data, null, 2));
+
+      // Télécharger le template avec placeholders (priorité) ou le template original
       const templatePath = template.structure_data?.templateWithPlaceholdersPath || template.file_path;
+      console.log('[generate-cv-word] Downloading template from path:', templatePath);
+      
       const { data: templateFile, error: downloadError } = await supabase
         .storage
         .from('cv-templates')
         .download(templatePath);
 
       if (downloadError || !templateFile) {
+        console.error('[generate-cv-word] Download error:', downloadError);
         throw new Error(`Failed to download template: ${downloadError?.message}`);
       }
 
+      console.log('[generate-cv-word] Template downloaded, size:', templateFile.size, 'bytes');
       templateBuffer = await templateFile.arrayBuffer();
     } else {
       throw new Error('No template_id specified');
