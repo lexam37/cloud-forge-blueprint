@@ -1,7 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { convert } from "https://deno.land/x/deno_mammoth@v0.1.0/mod.ts";
-import { DOMParser } from "https://deno.land/std@0.168.0/dom/mod.ts";
+import mammoth from "https://esm.sh/mammoth@1.6.0";
+import { DOMParser } from "https://deno.land/x/deno_dom@v0.1.43/deno-dom-wasm.ts";
 import { z } from "https://deno.land/x/zod@v3.21.4/mod.ts";
 
 console.log('SUPABASE_DB_URL:', Deno.env.get('SUPABASE_DB_URL') ? 'Set' : 'Missing');
