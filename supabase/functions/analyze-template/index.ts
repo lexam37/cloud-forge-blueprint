@@ -8,33 +8,7 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-interface DetailedStyle {
-  font: string;
-  size: string;
-  color: string;
-  bold: boolean;
-  italic: boolean;
-  underline: { type: string; color: string } | null;
-  strike: boolean;
-  case: 'uppercase' | 'lowercase' | 'mixed' | 'capitalize';
-  alignment: 'left' | 'center' | 'right' | 'justify';
-  spacingBefore: string;
-  spacingAfter: string;
-  lineHeight: string;
-  indent: string;
-  firstLineIndent: string;
-  bullet: boolean;
-  bulletStyle: string | null;
-  border: {
-    top: string | null;
-    right: string | null;
-    bottom: string | null;
-    left: string | null;
-    color: string | null;
-  };
-  backgroundColor: string | null;
-  position: 'header' | 'body' | 'footer';
-}
+const LOVABLE_API_KEY = Deno.env.get('LOVABLE_API_KEY');
 
 const requestSchema = z.object({
   templateId: z.string().uuid({ message: 'templateId must be a valid UUID' })
@@ -86,467 +60,162 @@ serve(async (req: Request) => {
       throw new Error(`Failed to download file: ${fileError?.message}`);
     }
 
-    console.log('[analyze-template] Starting enhanced XML analysis...');
-    const structureData = await analyzeTemplateStructure(fileData, templateId, supabase, user.id);
+    console.log('[analyze-template] Starting AI-powered analysis...');
+    const structureData = await analyzeTemplateWithAI(fileData, templateId, supabase, user.id);
     console.log('[analyze-template] Analysis complete');
 
     await supabase.from('processing_logs').insert({
       cv_document_id: null,
       step: 'template_analysis',
-      message: 'Template analyzed successfully',
+      message: 'Template analyzed successfully with AI',
       user_id: user.id
     });
 
     return new Response(
-      JSON.stringify({ 
-        success: true, 
-        templateId, 
-        structureData, 
-        message: 'Template analyzed successfully' 
-      }),
-      { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 }
+      JSON.stringify({ success: true, structure: structureData }),
+      { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
 
-  } catch (error) {
+  } catch (error: any) {
     console.error('[analyze-template] Error:', error);
     return new Response(
-      JSON.stringify({ error: error instanceof Error ? error.message : 'Unknown error' }),
-      { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 500 }
+      JSON.stringify({ error: error.message }),
+      { 
+        status: 500,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      }
     );
   }
 });
 
 /**
- * Parse les styles définis dans styles.xml
+ * Analyse le template en utilisant l'IA Lovable (Gemini)
  */
-function parseStylesXml(stylesXml: string): Map<string, any> {
-  const stylesMap = new Map<string, any>();
+async function analyzeTemplateWithAI(
+  fileData: Blob,
+  templateId: string,
+  supabase: any,
+  userId: string
+): Promise<any> {
+  console.log('[analyzeTemplateWithAI] Starting AI analysis...');
   
-  const styleRegex = /<w:style[^>]*w:styleId="([^"]+)"[^>]*>([\s\S]*?)<\/w:style>/g;
-  let styleMatch;
-  
-  while ((styleMatch = styleRegex.exec(stylesXml)) !== null) {
-    const styleId = styleMatch[1];
-    const styleContent = styleMatch[2];
-    
-    // Extraire les propriétés de run (rPr)
-    const rPrMatch = styleContent.match(/<w:rPr>([\s\S]*?)<\/w:rPr>/);
-    const rPr = rPrMatch ? rPrMatch[1] : '';
-    
-    // Extraire les propriétés de paragraphe (pPr)
-    const pPrMatch = styleContent.match(/<w:pPr>([\s\S]*?)<\/w:pPr>/);
-    const pPr = pPrMatch ? pPrMatch[1] : '';
-    
-    // Parser les polices
-    const fontMatch = rPr.match(/<w:rFonts[^>]*(?:w:ascii="([^"]+)"|w:hAnsi="([^"]+)"|w:cs="([^"]+)")[^>]*>/);
-    const font = fontMatch ? (fontMatch[1] || fontMatch[2] || fontMatch[3]) : null;
-    
-    // Parser la taille
-    const szMatch = rPr.match(/<w:sz w:val="(\d+)"/);
-    const size = szMatch ? parseInt(szMatch[1]) / 2 : null;
-    
-    // Parser la couleur
-    const colorMatch = rPr.match(/<w:color w:val="([^"]+)"/);
-    const color = colorMatch ? colorMatch[1] : null;
-    
-    // Parser gras/italique
-    const bold = /<w:b\b/.test(rPr);
-    const italic = /<w:i\b/.test(rPr);
-    
-    stylesMap.set(styleId, {
-      font,
-      size,
-      color,
-      bold,
-      italic,
-      rPr,
-      pPr
-    });
+  if (!LOVABLE_API_KEY) {
+    throw new Error('LOVABLE_API_KEY not configured');
   }
-  
-  console.log(`[parseStylesXml] Parsed ${stylesMap.size} style definitions`);
-  return stylesMap;
-}
 
-/**
- * Parse le XML d'un fichier DOCX avec support des styles définis
- */
-async function analyzeTemplateStructure(fileData: Blob, templateId: string, supabase: any, userId: string) {
-  console.log('[analyzeTemplateStructure] Extracting DOCX XML...');
-  
+  // Lire le fichier comme ArrayBuffer
   const arrayBuffer = await fileData.arrayBuffer();
-  const zip = await JSZip.loadAsync(arrayBuffer);
+  const uint8Array = new Uint8Array(arrayBuffer);
   
-  const documentXml = await zip.file('word/document.xml')?.async('text');
-  const stylesXml = await zip.file('word/styles.xml')?.async('text');
+  // Extraire le contenu textuel du document
+  const zip = await JSZip.loadAsync(uint8Array);
+  const documentXml = await zip.file('word/document.xml')?.async('string');
   
-  if (!documentXml) throw new Error('Could not extract document.xml from DOCX');
-  
-  // Parser les styles définis
-  const stylesMap = stylesXml ? parseStylesXml(stylesXml) : new Map();
-  
-  console.log('[analyzeTemplateStructure] Parsing document structure...');
-  
-  const extractedContent: any[] = [];
-  
-  // Regex pour extraire les paragraphes avec leurs propriétés
-  const paragraphRegex = /<w:p\b[^>]*>([\s\S]*?)<\/w:p>/g;
-  let pMatch;
-  let index = 0;
-  
-  while ((pMatch = paragraphRegex.exec(documentXml)) !== null) {
-    const paragraphContent = pMatch[1];
-    
-    // Extraire le texte
-    const textRegex = /<w:t[^>]*>(.*?)<\/w:t>/g;
-    let textMatch;
-    let text = '';
-    while ((textMatch = textRegex.exec(paragraphContent)) !== null) {
-      text += textMatch[1];
-    }
-    
-    if (!text || text.trim().length < 2) continue;
-    
-    // Extraire les propriétés de paragraphe
-    const pPrMatch = paragraphContent.match(/<w:pPr>([\s\S]*?)<\/w:pPr>/);
-    const pPr = pPrMatch ? pPrMatch[1] : '';
-    
-    // Chercher le style appliqué
-    const styleIdMatch = pPr.match(/<w:pStyle w:val="([^"]+)"/);
-    const styleId = styleIdMatch ? styleIdMatch[1] : null;
-    const definedStyle = styleId ? stylesMap.get(styleId) : null;
-    
-    // Extraire les propriétés de run (combiner style défini + override local)
-    const runs = paragraphContent.match(/<w:r\b[^>]*>([\s\S]*?)<\/w:r>/g);
-    let firstRunRPr = '';
-    if (runs && runs.length > 0) {
-      const firstRun = runs[0];
-      const rPrMatch = firstRun.match(/<w:rPr>([\s\S]*?)<\/w:rPr>/);
-      firstRunRPr = rPrMatch ? rPrMatch[1] : '';
-    }
-    
-    // Combiner style défini + override
-    const combinedRPr = (definedStyle?.rPr || '') + firstRunRPr;
-    
-    // Parser les styles de caractère
-    const isBold = /<w:b\b/.test(combinedRPr) || definedStyle?.bold || false;
-    const isItalic = /<w:i\b/.test(combinedRPr) || definedStyle?.italic || false;
-    const isUnderline = /<w:u\b/.test(combinedRPr);
-    const isStrike = /<w:strike\b/.test(combinedRPr);
-    
-    // Taille de police (local > defined > default)
-    let fontSize = '11pt';
-    const localSzMatch = combinedRPr.match(/<w:sz w:val="(\d+)"/);
-    if (localSzMatch) {
-      fontSize = `${parseInt(localSzMatch[1]) / 2}pt`;
-    } else if (definedStyle?.size) {
-      fontSize = `${definedStyle.size}pt`;
-    }
-    
-    // Police (local > defined > default)
-    let fontFamily = 'Calibri';
-    const localFontMatch = combinedRPr.match(/<w:rFonts[^>]*(?:w:ascii="([^"]+)"|w:hAnsi="([^"]+)"|w:cs="([^"]+)")[^>]*>/);
-    if (localFontMatch) {
-      fontFamily = localFontMatch[1] || localFontMatch[2] || localFontMatch[3] || 'Calibri';
-    } else if (definedStyle?.font) {
-      fontFamily = definedStyle.font;
-    }
-    
-    // Couleur (local > defined > default)
-    let color = '#000000';
-    const localColorMatch = combinedRPr.match(/<w:color w:val="([^"]+)"/);
-    if (localColorMatch) {
-      const colorVal = localColorMatch[1];
-      color = colorVal.toLowerCase() === 'auto' ? '#000000' : `#${colorVal}`;
-    } else if (definedStyle?.color && definedStyle.color !== 'auto') {
-      color = `#${definedStyle.color}`;
-    }
-    
-    // Log pour debug des 5 premiers éléments
-    if (index < 5) {
-      console.log(`[analyzeTemplateStructure] Element ${index}: "${text.substring(0, 50)}" | Font: ${fontFamily} | Size: ${fontSize} | Color: ${color} | Bold: ${isBold}`);
-    }
-    
-    // Soulignement
-    const underlineTypeMatch = combinedRPr.match(/<w:u w:val="([^"]+)"/);
-    const underline = isUnderline && underlineTypeMatch ? {
-      type: underlineTypeMatch[1],
-      color: color
-    } : null;
-    
-    // Casse du texte
-    let textCase: 'uppercase' | 'lowercase' | 'mixed' | 'capitalize' = 'mixed';
-    const capsMatch = combinedRPr.match(/<w:caps\b/);
-    if (capsMatch) textCase = 'uppercase';
-    else if (text === text.toUpperCase() && text !== text.toLowerCase()) textCase = 'uppercase';
-    else if (text === text.toLowerCase()) textCase = 'lowercase';
-    else if (text.match(/^[A-ZÀ-Ý][a-zà-ÿ]/)) textCase = 'capitalize';
-    
-    // Alignement de paragraphe
-    const combinedPPr = (definedStyle?.pPr || '') + pPr;
-    const alignMatch = combinedPPr.match(/<w:jc w:val="([^"]+)"/);
-    let alignment: 'left' | 'center' | 'right' | 'justify' = 'left';
-    if (alignMatch) {
-      const alignVal = alignMatch[1];
-      if (alignVal === 'center') alignment = 'center';
-      else if (alignVal === 'right') alignment = 'right';
-      else if (alignVal === 'both') alignment = 'justify';
-    }
-    
-    // Espacements (en twips, 1 twip = 1/20 pt)
-    const spacingMatch = combinedPPr.match(/<w:spacing[^>]*w:before="(\d+)"[^>]*w:after="(\d+)"/);
-    const spacingBefore = spacingMatch ? `${parseInt(spacingMatch[1]) / 20}pt` : '0pt';
-    const spacingAfter = spacingMatch ? `${parseInt(spacingMatch[2]) / 20}pt` : '0pt';
-    
-    // Interligne
-    const lineMatch = combinedPPr.match(/<w:spacing[^>]*w:line="(\d+)"/);
-    const lineHeight = lineMatch ? `${parseInt(lineMatch[1]) / 240}` : '1.15';
-    
-    // Retraits (en twips)
-    const indMatch = combinedPPr.match(/<w:ind[^>]*w:left="(\d+)"/);
-    const indent = indMatch ? `${parseInt(indMatch[1]) / 20}pt` : '0pt';
-    
-    const firstLineIndMatch = combinedPPr.match(/<w:ind[^>]*w:firstLine="(\d+)"/);
-    const firstLineIndent = firstLineIndMatch ? `${parseInt(firstLineIndMatch[1]) / 20}pt` : '0pt';
-    
-    // Puces et numérotation
-    const numPrMatch = combinedPPr.match(/<w:numPr>/);
-    const isList = numPrMatch !== null;
-    let bulletStyle: string | null = null;
-    if (isList) {
-      const numIdMatch = combinedPPr.match(/<w:numId w:val="(\d+)"/);
-      bulletStyle = numIdMatch ? 'bullet' : 'custom';
-    }
-    
-    // Bordures
-    const hasBorder = /<w:pBdr>/.test(combinedPPr);
-    const borderColor = hasBorder ? color : null;
-    
-    // Fond/ombrage
-    const shadingMatch = combinedPPr.match(/<w:shd[^>]*w:fill="([^"]+)"/);
-    const backgroundColor = shadingMatch ? `#${shadingMatch[1]}` : null;
-    
-    extractedContent.push({
-      text: text.trim(),
-      index,
-      style: {
-        font: fontFamily,
-        size: fontSize,
-        color: color,
-        bold: isBold,
-        italic: isItalic,
-        underline: underline,
-        strike: isStrike,
-        case: textCase,
-        alignment: alignment,
-        spacingBefore: spacingBefore,
-        spacingAfter: spacingAfter,
-        lineHeight: lineHeight,
-        indent: indent,
-        firstLineIndent: firstLineIndent,
-        bullet: isList,
-        bulletStyle: bulletStyle,
-        border: {
-          top: hasBorder ? '1pt solid' : null,
-          right: hasBorder ? '1pt solid' : null,
-          bottom: hasBorder ? '1pt solid' : null,
-          left: hasBorder ? '1pt solid' : null,
-          color: borderColor
-        },
-        backgroundColor: backgroundColor,
-        position: 'body' as const
-      }
-    });
-    
-    index++;
+  if (!documentXml) {
+    throw new Error('Could not extract document.xml from template');
   }
 
-  console.log('[analyzeTemplateStructure] Found', extractedContent.length, 'elements');
+  // Extraire le texte visible
+  const textMatches = documentXml.match(/<w:t[^>]*>(.*?)<\/w:t>/g) || [];
+  const fullText = textMatches
+    .map((t: string) => t.replace(/<\/?w:t[^>]*>/g, ''))
+    .join('\n')
+    .substring(0, 20000); // Limiter la taille pour l'API
 
-  // Détection de l'en-tête
-  let headerEndIndex = 0;
-  const sectionStarters = ['compétence', 'competence', 'experience', 'expérience', 'formation', 'profil', 'skill'];
-  
-  for (let i = 0; i < Math.min(15, extractedContent.length); i++) {
-    const text = extractedContent[i].text.toLowerCase().trim();
-    if (sectionStarters.some(starter => text.includes(starter)) && text.length < 60) {
-      headerEndIndex = i;
-      console.log(`[analyzeTemplateStructure] Header ends at index ${i}, detected: "${extractedContent[i].text}"`);
-      break;
+  console.log('[analyzeTemplateWithAI] Extracted text length:', fullText.length);
+
+  // Appeler l'IA pour analyser la structure du template
+  const prompt = `Tu es un expert en analyse de documents CV professionnels.
+
+Analyse ce contenu extrait d'un template Word de CV et identifie précisément:
+
+1. **Les SECTIONS principales** (ex: Compétences, Expérience professionnelle, Formations, etc.)
+2. **Pour chaque section identifiée**, note:
+   - Le titre EXACT tel qu'il apparaît dans le document
+   - Les éléments de contenu présents (ce sont des EXEMPLES à remplacer)
+   - Le type de contenu attendu (liste, paragraphes, tableau, etc.)
+
+3. **L'en-tête** : Identifie les éléments dans l'en-tête (trigramme, titre professionnel, contact, etc.)
+
+4. **Le pied de page** : Identifie le contenu du pied de page s'il existe
+
+CONTENU DU TEMPLATE:
+---
+${fullText}
+---
+
+Réponds UNIQUEMENT en JSON valide avec cette structure exacte:
+{
+  "sections": [
+    {
+      "name": "Type de section (Compétences|Expérience|Formations|Autre)",
+      "title": "Titre exact tel qu'il apparaît",
+      "contentType": "list|paragraphs|table",
+      "exampleContent": "Exemple de contenu présent",
+      "placeholderType": "competences|missions|formations|custom"
     }
+  ],
+  "header": {
+    "hasTrigramme": true|false,
+    "hasTitle": true|false,
+    "hasContact": true|false,
+    "content": "Contenu de l'en-tête"
+  },
+  "footer": {
+    "hasContent": true|false,
+    "content": "Contenu du pied de page"
   }
-  
-  const headerElements = extractedContent.slice(0, headerEndIndex).map(el => ({
-    ...el.style,
-    position: 'header' as const
-  }));
+}`;
 
-  console.log(`[analyzeTemplateStructure] Header extracted: ${headerElements.length} elements`);
+  console.log('[analyzeTemplateWithAI] Calling Lovable AI...');
 
-  // Détection des sections principales
-  console.log('[analyzeTemplateStructure] Detecting main sections...');
-  
-  const sections: any[] = [];
-  const sectionKeywords: Record<string, string[]> = {
-    'Compétences': ['compétence', 'competence', 'skill', 'savoir', 'technologie', 'expertise', 'technical', 'technique', 'connaissances', 'aptitudes'],
-    'Expérience': ['expérience', 'experience', 'parcours', 'mission', 'professionnel', 'carrière', 'emploi'],
-    'Formations & Certifications': ['formation', 'certification', 'diplôme', 'education', 'étude', 'académique', 'universitaire']
-  };
-  
-  console.log(`[analyzeTemplateStructure] Scanning ${extractedContent.length - headerEndIndex} elements for sections...`);
-  
-  for (let i = headerEndIndex; i < extractedContent.length; i++) {
-    const text = extractedContent[i].text.toLowerCase().trim();
-    const origText = extractedContent[i].text.trim();
-    const isBold = extractedContent[i].style.bold;
-    
-    // Log des candidats potentiels (textes courts et/ou en gras)
-    if ((origText.length < 80 && isBold) || origText.length < 40) {
-      console.log(`[analyzeTemplateStructure] Candidate at ${i}: "${origText}" (bold: ${isBold}, len: ${origText.length})`);
-    }
-    
-    // Section = texte court (< 80 caractères) avec un mot-clé, de préférence en gras
-    if (origText.length < 80) {
-      for (const [sectionName, keywords] of Object.entries(sectionKeywords)) {
-        const hasKeyword = keywords.some(kw => text.includes(kw));
-        
-        if (hasKeyword && !sections.find(s => s.name === sectionName)) {
-          sections.push({
-            name: sectionName,
-            titleStyle: extractedContent[i].style,
-            startIndex: i,
-            endIndex: i + 100
-          });
-          console.log(`[analyzeTemplateStructure] ✅ Section "${sectionName}" detected at index ${i}: "${origText}" (bold: ${isBold})`);
-          break;
+  const aiResponse = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${LOVABLE_API_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: 'google/gemini-2.5-pro',
+      messages: [
+        {
+          role: 'user',
+          content: prompt
         }
-      }
-    }
-  }
-  
-  console.log(`[analyzeTemplateStructure] Total sections detected: ${sections.length}`);
-  
-  // Ajuster les endIndex
-  sections.forEach((section, idx) => {
-    if (idx < sections.length - 1) {
-      section.endIndex = sections[idx + 1].startIndex;
-    } else {
-      section.endIndex = extractedContent.length;
-    }
+      ],
+      response_format: { type: 'json_object' },
+      temperature: 0.1
+    }),
   });
 
-  // Analyse des styles par section
-  const skillCategoryStyles: DetailedStyle[] = [];
-  const skillItemStyles: DetailedStyle[] = [];
-  const missionTitleStyles: DetailedStyle[] = [];
-  const missionContextStyles: DetailedStyle[] = [];
-  const missionAchievementStyles: DetailedStyle[] = [];
-  const missionEnvironmentStyles: DetailedStyle[] = [];
-  const educationItemStyles: DetailedStyle[] = [];
-  
-  const competencesSection = sections.find(s => s.name === 'Compétences');
-  if (competencesSection) {
-    console.log(`[analyzeTemplateStructure] Analyzing Compétences section (${competencesSection.startIndex} to ${competencesSection.endIndex})`);
-    for (let i = competencesSection.startIndex + 1; i < competencesSection.endIndex; i++) {
-      const item = extractedContent[i];
-      if (!item) continue;
-      const text = item.text.trim();
-      
-      if ((text.includes(':') || item.style.bold) && text.length < 50 && !text.includes(',')) {
-        skillCategoryStyles.push(item.style);
-        console.log(`[analyzeTemplateStructure] Skill category: "${text.substring(0, 40)}"`);
-      } else if (text.includes(',') || item.style.bullet) {
-        skillItemStyles.push(item.style);
-      }
-    }
-  } else {
-    console.warn('[analyzeTemplateStructure] Compétences section NOT found');
-  }
-  
-  const experienceSection = sections.find(s => s.name === 'Expérience');
-  if (experienceSection) {
-    console.log(`[analyzeTemplateStructure] Analyzing Expérience section (${experienceSection.startIndex} to ${experienceSection.endIndex})`);
-    for (let i = experienceSection.startIndex + 1; i < experienceSection.endIndex; i++) {
-      const item = extractedContent[i];
-      if (!item) continue;
-      const text = item.text.trim();
-      const textLower = text.toLowerCase();
-      
-      if (/\d{2}\/\d{4}/.test(text) && (text.includes('@') || text.includes('-'))) {
-        missionTitleStyles.push(item.style);
-        console.log(`[analyzeTemplateStructure] Mission title: "${text.substring(0, 50)}"`);
-      } else if (textLower.includes('contexte') || textLower.includes('description')) {
-        missionContextStyles.push(item.style);
-      } else if (textLower.includes('environnement') || textLower.includes('technologie')) {
-        missionEnvironmentStyles.push(item.style);
-      } else if (item.style.bullet) {
-        missionAchievementStyles.push(item.style);
-      }
-    }
-  } else {
-    console.warn('[analyzeTemplateStructure] Expérience section NOT found');
-  }
-  
-  const formationSection = sections.find(s => s.name === 'Formations & Certifications');
-  if (formationSection) {
-    for (let i = formationSection.startIndex + 1; i < Math.min(formationSection.endIndex, formationSection.startIndex + 20); i++) {
-      const item = extractedContent[i];
-      if (item && item.text.trim().length > 3) {
-        educationItemStyles.push(item.style);
-      }
-    }
+  if (!aiResponse.ok) {
+    const errorText = await aiResponse.text();
+    console.error('[analyzeTemplateWithAI] AI API error:', aiResponse.status, errorText);
+    throw new Error(`AI API error: ${aiResponse.status}`);
   }
 
-  console.log('[analyzeTemplateStructure] Normalizing styles...');
-  
-  const getMostFrequent = (styles: DetailedStyle[]) => {
-    if (styles.length === 0) return null;
-    return styles[0];
-  };
+  const aiResult = await aiResponse.json();
+  const analysisText = aiResult.choices[0].message.content;
+  console.log('[analyzeTemplateWithAI] AI analysis received');
 
-  // Construction de la structure finale
-  const structure = {
-    sections: sections.map(s => ({ name: s.name })),
-    detailedStyles: {
-      skills: {
-        sectionTitle: getMostFrequent(sections.filter(s => s.name === 'Compétences').map(s => s.titleStyle)),
-        category: getMostFrequent(skillCategoryStyles),
-        items: getMostFrequent(skillItemStyles)
-      },
-      experience: {
-        sectionTitle: getMostFrequent(sections.filter(s => s.name === 'Expérience').map(s => s.titleStyle)),
-        missionTitle: getMostFrequent(missionTitleStyles),
-        context: getMostFrequent(missionContextStyles),
-        achievements: getMostFrequent(missionAchievementStyles),
-        environment: getMostFrequent(missionEnvironmentStyles),
-        missionDateFormat: 'MM/YYYY'
-      },
-      education: {
-        sectionTitle: getMostFrequent(sections.filter(s => s.name === 'Formations & Certifications').map(s => s.titleStyle)),
-        item: getMostFrequent(educationItemStyles)
-      }
-    },
-    pageLayout: {
-      orientation: 'portrait',
-      margins: {
-        top: '2.54cm',
-        right: '2cm',
-        bottom: '2.54cm',
-        left: '2cm'
-      }
-    }
-  };
+  let structure;
+  try {
+    structure = JSON.parse(analysisText);
+  } catch (e) {
+    console.error('[analyzeTemplateWithAI] Failed to parse AI response:', analysisText);
+    throw new Error('AI response was not valid JSON');
+  }
 
-  console.log('[analyzeTemplateStructure] Creating template with placeholders...');
+  console.log('[analyzeTemplateWithAI] Structure:', JSON.stringify(structure, null, 2));
+
+  // Créer un template avec placeholders basé sur l'analyse IA
+  const modifiedTemplate = await createTemplateWithPlaceholdersAI(zip, structure, documentXml);
   
-  // Créer un template avec placeholders
-  const modifiedTemplate = await createTemplateWithPlaceholders(zip, sections, extractedContent);
-  
-  // Sauvegarder le template modifié dans le storage
+  // Sauvegarder le template modifié
   const templateFileName = `template-with-placeholders-${templateId}-${Date.now()}.docx`;
   const templatePath = `${userId}/${templateFileName}`;
   
-  console.log('[analyzeTemplateStructure] Uploading template with placeholders to:', templatePath);
+  console.log('[analyzeTemplateWithAI] Uploading modified template...');
   
   const { error: uploadError } = await supabase.storage
     .from('cv-templates')
@@ -556,17 +225,16 @@ async function analyzeTemplateStructure(fileData: Blob, templateId: string, supa
     });
 
   if (uploadError) {
-    console.error('[analyzeTemplateStructure] Failed to upload template with placeholders:', uploadError);
-    throw new Error(`Failed to upload template with placeholders: ${uploadError.message}`);
+    console.error('[analyzeTemplateWithAI] Upload error:', uploadError);
+    throw new Error(`Failed to upload template: ${uploadError.message}`);
   }
 
-  console.log('[analyzeTemplateStructure] Template with placeholders uploaded successfully:', templatePath);
+  console.log('[analyzeTemplateWithAI] Template uploaded:', templatePath);
   
-  // Ajouter le chemin du template avec placeholders à la structure
-  (structure as any).templateWithPlaceholdersPath = templatePath;
+  // Ajouter le chemin au résultat
+  structure.templateWithPlaceholdersPath = templatePath;
 
-  console.log('[analyzeTemplateStructure] Saving to database with templateWithPlaceholdersPath:', templatePath);
-  
+  // Sauvegarder la structure dans la base
   const { error: updateError } = await supabase
     .from('cv_templates')
     .update({ structure_data: structure })
@@ -574,151 +242,86 @@ async function analyzeTemplateStructure(fileData: Blob, templateId: string, supa
     .eq('user_id', userId);
 
   if (updateError) {
-    console.error('[analyzeTemplateStructure] Failed to update database:', updateError);
+    console.error('[analyzeTemplateWithAI] DB update error:', updateError);
     throw new Error(`Failed to update database: ${updateError.message}`);
   }
 
-  console.log('[analyzeTemplateStructure] Analysis complete, structure saved with placeholder template');
-  
+  console.log('[analyzeTemplateWithAI] Analysis complete');
   return structure;
 }
 
 /**
- * Crée un template avec des placeholders docxtemplater en remplaçant tout le contenu exemple
- * Utilise directement les sections détectées par analyzeTemplateStructure
+ * Crée un template avec placeholders docxtemplater basé sur l'analyse IA
  */
-async function createTemplateWithPlaceholders(
-  zipContent: any,
-  sections: Array<{ name: string; startIndex: number; endIndex: number; titleStyle: DetailedStyle }>,
-  extractedContent: Array<{ text: string; style: DetailedStyle }>
+async function createTemplateWithPlaceholdersAI(
+  zip: any,
+  structure: any,
+  documentXml: string
 ): Promise<Uint8Array> {
-  console.log('[createTemplateWithPlaceholders] Creating template with placeholders...');
-  console.log('[createTemplateWithPlaceholders] Sections detected:', sections.map(s => `${s.name} (${s.startIndex} to ${s.endIndex})`).join(', '));
+  console.log('[createTemplateWithPlaceholdersAI] Creating template with AI-guided placeholders...');
   
-  const documentXml = await zipContent.file('word/document.xml')?.async('string');
-  if (!documentXml) {
-    throw new Error('document.xml not found in template');
-  }
-
-  const paragraphs = documentXml.match(/<w:p\b[^>]*>[\s\S]*?<\/w:p>/g) || [];
-  console.log(`[createTemplateWithPlaceholders] Found ${paragraphs.length} paragraphs in template`);
-
   let modifiedXml = documentXml;
   
-  // Mapper les extractedContent aux paragraphes XML
-  // On va construire un mapping entre les index d'extractedContent et les paragraphes XML
-  const contentToParagraphMap: Map<number, number> = new Map();
-  let paraIndex = 0;
-  
-  for (let contentIdx = 0; contentIdx < extractedContent.length && paraIndex < paragraphs.length; contentIdx++) {
-    const content = extractedContent[contentIdx];
-    // Trouver le paragraphe correspondant
-    while (paraIndex < paragraphs.length) {
-      const paraText = paragraphs[paraIndex].match(/<w:t[^>]*>(.*?)<\/w:t>/g);
-      if (paraText) {
-        const fullText = paraText.map((t: string) => t.replace(/<\/?w:t[^>]*>/g, '')).join('').trim();
-        // Si le texte correspond (même partiellement), on mappe
-        if (fullText.includes(content.text.substring(0, 30)) || content.text.includes(fullText.substring(0, 30))) {
-          contentToParagraphMap.set(contentIdx, paraIndex);
-          paraIndex++;
-          break;
-        }
-      }
-      paraIndex++;
-    }
-  }
-  
-  console.log(`[createTemplateWithPlaceholders] Mapped ${contentToParagraphMap.size} content items to paragraphs`);
-
-  // Pour chaque section, remplacer le contenu
-  sections.forEach((section) => {
-    console.log(`[createTemplateWithPlaceholders] Processing section "${section.name}" (content idx ${section.startIndex} to ${section.endIndex})`);
+  // Pour chaque section identifiée par l'IA
+  for (const section of structure.sections || []) {
+    console.log(`[createTemplateWithPlaceholdersAI] Processing section: ${section.name} (${section.title})`);
     
-    // Convertir les index de contenu en index de paragraphes
-    const startParaIdx = contentToParagraphMap.get(section.startIndex);
-    const endParaIdx = contentToParagraphMap.get(section.endIndex - 1);
+    // Définir les placeholders selon le type identifié par l'IA
+    let placeholders = '';
     
-    if (startParaIdx === undefined) {
-      console.warn(`[createTemplateWithPlaceholders] Could not find paragraph for section "${section.name}" start`);
-      return;
+    if (section.placeholderType === 'competences') {
+      placeholders = '{#competences}{category}: {items}\n{/competences}';
+    } else if (section.placeholderType === 'missions') {
+      placeholders = '{#missions}{period} - {role} @ {client}\n\nContexte: {context}\n\nRéalisations:\n{#achievements}- {.}\n{/achievements}\n\nEnvironnement: {environment}\n\n{/missions}';
+    } else if (section.placeholderType === 'formations') {
+      placeholders = '{#formations}{year} - {degree} - {institution}\n{/formations}';
     }
     
-    const actualEndIdx = endParaIdx !== undefined ? endParaIdx + 1 : paragraphs.length;
-    
-    console.log(`[createTemplateWithPlaceholders] Section "${section.name}" maps to paragraphs ${startParaIdx} to ${actualEndIdx}`);
-    
-    // Supprimer tous les paragraphes de contenu (sauf le titre)
-    const contentStartIdx = startParaIdx + 1;
-    for (let i = contentStartIdx; i < actualEndIdx && i < paragraphs.length; i++) {
-      if (paragraphs[i]) {
-        modifiedXml = modifiedXml.replace(paragraphs[i], '');
-      }
-    }
-    console.log(`[createTemplateWithPlaceholders] Removed ${actualEndIdx - contentStartIdx} paragraphs from "${section.name}"`);
-    
-    // Insérer un paragraphe avec les placeholders appropriés
-    if (contentStartIdx < paragraphs.length && paragraphs[contentStartIdx]) {
-      const basePara = paragraphs[contentStartIdx];
-      let placeholder = '';
+    if (placeholders) {
+      // Chercher le titre de la section et marquer l'emplacement des placeholders
+      const escapedTitle = section.title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const titleRegex = new RegExp(`(<w:t[^>]*>)(${escapedTitle})(<\/w:t>)`, 'i');
       
-      if (section.name === 'Compétences') {
-        placeholder = '{#competences}{category}: {items}\n{/competences}';
-      } else if (section.name === 'Expérience') {
-        placeholder = '{#missions}{period} - {role} @ {client}\n\nContexte: {context}\n\nRéalisations:\n{#achievements}- {.}\n{/achievements}\nEnvironnement: {environment}\n\n{/missions}';
-      } else if (section.name === 'Formations & Certifications') {
-        placeholder = '{#formations}{year} - {degree} - {institution}\n{/formations}';
+      if (titleRegex.test(modifiedXml)) {
+        console.log(`[createTemplateWithPlaceholdersAI] Found section: ${section.title}`);
+        // Marquer l'emplacement pour un traitement ultérieur
+        modifiedXml = modifiedXml.replace(
+          titleRegex,
+          `$1$2$3<!-- SECTION_MARKER:${section.placeholderType} -->`
+        );
+      } else {
+        console.warn(`[createTemplateWithPlaceholdersAI] Could not find section title: ${section.title}`);
       }
-      
-      const newPara = basePara.replace(
-        /<w:t[^>]*>.*?<\/w:t>/g,
-        `<w:t xml:space="preserve">${placeholder}</w:t>`
-      );
-      modifiedXml = modifiedXml.replace(basePara, newPara);
-      console.log(`[createTemplateWithPlaceholders] Added placeholder for ${section.name}`);
-    }
-  });
-
-  // Fonction pour extraire le texte d'un paragraphe
-  const extractText = (para: string): string => {
-    const textMatches = para.match(/<w:t[^>]*>(.*?)<\/w:t>/g);
-    if (!textMatches) return '';
-    return textMatches.map((t: string) => t.replace(/<\/?w:t[^>]*>/g, '')).join('').trim();
-  };
-
-  // Remplacer le trigramme et le titre dans le header
-  for (let i = 0; i < Math.min(10, paragraphs.length); i++) {
-    const text = extractText(paragraphs[i]);
-    if (/^[A-Z]{3}$/.test(text)) {
-      const newPara = paragraphs[i].replace(
-        /<w:t[^>]*>[A-Z]{3}<\/w:t>/g,
-        '<w:t>{trigram}</w:t>'
-      );
-      modifiedXml = modifiedXml.replace(paragraphs[i], newPara);
-      console.log(`[createTemplateWithPlaceholders] Replaced trigram`);
-      break;
     }
   }
 
-  for (let i = 0; i < Math.min(15, paragraphs.length); i++) {
-    const text = extractText(paragraphs[i]).toLowerCase();
-    if (/(consultant|développeur|chef de projet|manager|ingénieur|architecte)/i.test(text)) {
-      const newPara = paragraphs[i].replace(
-        /<w:t[^>]*>.*?<\/w:t>/g,
-        '<w:t>{title}</w:t>'
-      );
-      modifiedXml = modifiedXml.replace(paragraphs[i], newPara);
-      console.log(`[createTemplateWithPlaceholders] Replaced title`);
-      break;
-    }
+  // Remplacer trigramme et titre dans le header (si identifiés par l'IA)
+  if (structure.header?.hasTrigramme) {
+    modifiedXml = modifiedXml.replace(
+      /<w:t[^>]*>([A-Z]{3})<\/w:t>/g,
+      '<w:t>{trigram}</w:t>'
+    );
+    console.log('[createTemplateWithPlaceholdersAI] Replaced trigramme placeholder');
+  }
+  
+  if (structure.header?.hasTitle) {
+    // Remplacer les titres professionnels longs
+    modifiedXml = modifiedXml.replace(
+      /<w:t[^>]*>([^<]{15,}(?:consultant|développeur|chef de projet|manager|ingénieur|architecte)[^<]{0,30})<\/w:t>/gi,
+      '<w:t>{title}</w:t>'
+    );
+    console.log('[createTemplateWithPlaceholdersAI] Replaced title placeholder');
   }
 
   // Mettre à jour le document.xml dans le ZIP
-  zipContent.file('word/document.xml', modifiedXml);
-
-  // Générer le nouveau DOCX
-  const generatedBuffer = await zipContent.generateAsync({ type: 'uint8array' });
-
-  console.log('[createTemplateWithPlaceholders] Template with placeholders created successfully');
+  zip.file('word/document.xml', modifiedXml);
   
+  // Générer le nouveau DOCX
+  const generatedBuffer = await zip.generateAsync({ 
+    type: 'uint8array',
+    compression: 'DEFLATE'
+  });
+  
+  console.log('[createTemplateWithPlaceholdersAI] Template created successfully');
   return generatedBuffer;
 }

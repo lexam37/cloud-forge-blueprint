@@ -9,6 +9,8 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
+const LOVABLE_API_KEY = Deno.env.get('LOVABLE_API_KEY');
+
 const requestSchema = z.object({
   cvDocumentId: z.string().uuid({ message: 'cvDocumentId must be a valid UUID' })
 });
@@ -49,177 +51,251 @@ serve(async (req: Request) => {
     const extractedData = cvDoc.extracted_data;
     if (!extractedData) throw new Error('No extracted data found in CV document');
 
+    if (!cvDoc.template_id) throw new Error('No template selected');
+
+    console.log('[generate-cv-word] Fetching template:', cvDoc.template_id);
+    const { data: template, error: templateError } = await supabase
+      .from('cv_templates')
+      .select('file_path, structure_data')
+      .eq('id', cvDoc.template_id)
+      .single();
+
+    if (templateError || !template) {
+      throw new Error('Template not found');
+    }
+
+    console.log('[generate-cv-word] Template structure:', JSON.stringify(template.structure_data, null, 2));
+
     // Télécharger le template avec placeholders
-    let templateBuffer: ArrayBuffer;
-    if (cvDoc.template_id) {
-      console.log('[generate-cv-word] Fetching template:', cvDoc.template_id);
-      const { data: template, error: templateError } = await supabase
-        .from('cv_templates')
-        .select('file_path, structure_data')
-        .eq('id', cvDoc.template_id)
-        .single();
-
-      if (templateError || !template) {
-        console.warn('[generate-cv-word] Template not found, using default');
-        throw new Error('Template not found');
-      }
-
-      console.log('[generate-cv-word] Template structure_data:', JSON.stringify(template.structure_data, null, 2));
-
-      // Télécharger le template avec placeholders (priorité) ou le template original
-      const templatePath = template.structure_data?.templateWithPlaceholdersPath || template.file_path;
-      console.log('[generate-cv-word] Downloading template from path:', templatePath);
-      
-      const { data: templateFile, error: downloadError } = await supabase
-        .storage
-        .from('cv-templates')
-        .download(templatePath);
-
-      if (downloadError || !templateFile) {
-        console.error('[generate-cv-word] Download error:', downloadError);
-        throw new Error(`Failed to download template: ${downloadError?.message}`);
-      }
-
-      console.log('[generate-cv-word] Template downloaded, size:', templateFile.size, 'bytes');
-      templateBuffer = await templateFile.arrayBuffer();
-    } else {
-      throw new Error('No template_id specified');
-    }
-
-    console.log('[generate-cv-word] Processing template with extracted data...');
-
-    // Charger le template
-    const zip = new PizZip(templateBuffer);
+    const templatePath = template.structure_data?.templateWithPlaceholdersPath || template.file_path;
+    console.log('[generate-cv-word] Downloading template from:', templatePath);
     
-    console.log('[generate-cv-word] Creating Docxtemplater instance...');
-    const doc = new Docxtemplater(zip, {
-      paragraphLoop: true,
-      linebreaks: true,
-      nullGetter: () => '',
-    });
+    const { data: templateFile, error: downloadError } = await supabase
+      .storage
+      .from('cv-templates')
+      .download(templatePath);
 
-    // Préparer les données pour le template
-    const templateData = {
-      // Header
-      trigram: extractedData.header?.trigram || 'XXX',
-      title: extractedData.header?.title || '',
-      commercial_contact: extractedData.header?.commercial_contact?.enabled 
-        ? (extractedData.header.commercial_contact.text || 'Contact Commercial')
-        : '',
-      
-      // Compétences
-      competences: extractedData.skills?.subcategories?.map((subcat: any) => ({
-        category: subcat.name,
-        items: subcat.items.join(', ')
-      })) || [],
-      
-      // Expériences/Missions
-      missions: extractedData.missions?.map((mission: any) => ({
-        period: `${mission.date_start} - ${mission.date_end}`,
-        role: mission.role || '',
-        client: mission.client || '',
-        location: mission.location || '',
-        context: mission.context || '',
-        achievements: mission.achievements || [],
-        environment: mission.environment?.join(', ') || ''
-      })) || [],
-      
-      // Formations
-      formations: extractedData.education?.map((edu: any) => ({
-        year: edu.year || '',
-        degree: edu.degree || '',
-        institution: edu.institution || '',
-        location: edu.location || ''
-      })) || [],
-      
-      // Footer
-      footer: extractedData.footer?.text || ''
-    };
-
-    console.log('[generate-cv-word] Template data prepared:', JSON.stringify(templateData, null, 2));
-
-    // Remplir le template
-    console.log('[generate-cv-word] Rendering template with data...');
-    try {
-      doc.render(templateData);
-      console.log('[generate-cv-word] Template rendered successfully');
-    } catch (renderError: any) {
-      console.error('[generate-cv-word] Error rendering template:', renderError);
-      console.error('[generate-cv-word] Docxtemplater errors:', doc.getFullText ? doc.getFullText() : 'N/A');
-      throw new Error(`Template rendering failed: ${renderError?.message || 'Unknown error'}`);
+    if (downloadError || !templateFile) {
+      console.error('[generate-cv-word] Download error:', downloadError);
+      throw new Error(`Failed to download template: ${downloadError?.message}`);
     }
 
-    // Générer le fichier final
-    const generatedBuffer = doc.getZip().generate({
-      type: 'arraybuffer',
-      compression: 'DEFLATE'
-    });
+    const templateBuffer = await templateFile.arrayBuffer();
+    console.log('[generate-cv-word] Template downloaded, size:', templateBuffer.byteLength);
 
-    console.log('[generate-cv-word] Document generated, uploading to storage...');
+    // Utiliser l'IA pour faire le mapping intelligent et générer le CV
+    console.log('[generate-cv-word] Generating CV with AI mapping...');
+    const generatedBuffer = await generateCVWithAI(
+      new Uint8Array(templateBuffer),
+      extractedData,
+      template.structure_data
+    );
 
-    // Uploader vers Supabase Storage
-    const fileName = `cv-${cvDocumentId}-${Date.now()}.docx`;
-    const filePath = `${user.id}/${fileName}`;
-
-    const { error: uploadError } = await supabase.storage
+    // Upload du fichier généré
+    const generatedFileName = `cv-${cvDocumentId}-${Date.now()}.docx`;
+    const generatedPath = `${user.id}/${generatedFileName}`;
+    
+    console.log('[generate-cv-word] Uploading generated CV...');
+    
+    const { error: uploadError } = await supabase
+      .storage
       .from('cv-generated')
-      .upload(filePath, generatedBuffer, {
+      .upload(generatedPath, generatedBuffer, {
         contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
         upsert: true
       });
 
     if (uploadError) {
-      throw new Error(`Failed to upload generated file: ${uploadError.message}`);
+      console.error('[generate-cv-word] Upload error:', uploadError);
+      throw new Error(`Failed to upload generated CV: ${uploadError.message}`);
     }
 
-    // Mettre à jour le document CV
-    const { error: updateError } = await supabase
+    // Mise à jour du document avec le chemin du fichier généré
+    await supabase
       .from('cv_documents')
       .update({
-        status: 'processed',
-        generated_file_path: filePath,
-        generated_file_type: 'docx',
-        updated_at: new Date().toISOString()
+        generated_file_path: generatedPath,
+        generated_file_type: 'docx' as any,
+        status: 'completed' as any
       })
       .eq('id', cvDocumentId);
 
-    if (updateError) {
-      console.error('[generate-cv-word] Failed to update CV document:', updateError);
-    }
-
-    await supabase.from('processing_logs').insert({
-      cv_document_id: cvDocumentId,
-      step: 'generation',
-      message: 'CV generated successfully',
-      details: { file_path: filePath }
-    });
-
-    console.log('[generate-cv-word] CV generated successfully:', filePath);
+    console.log('[generate-cv-word] CV generated successfully:', generatedPath);
 
     return new Response(
       JSON.stringify({ 
         success: true, 
-        message: 'CV generated successfully',
-        file_path: filePath 
+        file_path: generatedPath
       }),
-      { 
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        status: 200 
-      }
+      { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
 
-  } catch (error) {
+  } catch (error: any) {
     console.error('[generate-cv-word] Error:', error);
-    
     return new Response(
-      JSON.stringify({ 
-        success: false, 
-        error: error instanceof Error ? error.message : 'Unknown error occurred' 
-      }),
+      JSON.stringify({ error: error.message }),
       { 
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        status: 500 
+        status: 500,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       }
     );
   }
 });
+
+/**
+ * Génère le CV en utilisant l'IA pour faire le mapping intelligent
+ */
+async function generateCVWithAI(
+  templateBuffer: Uint8Array,
+  cvData: any,
+  templateStructure: any
+): Promise<Uint8Array> {
+  console.log('[generateCVWithAI] Starting AI-powered generation...');
+
+  if (!LOVABLE_API_KEY) {
+    throw new Error('LOVABLE_API_KEY not configured');
+  }
+
+  // Préparer les données du CV pour l'IA
+  const cvContent = {
+    trigram: cvData.trigram || 'XXX',
+    title: cvData.title || '',
+    competences: cvData.competences || [],
+    missions: cvData.missions || [],
+    formations: cvData.formations || []
+  };
+
+  console.log('[generateCVWithAI] CV data prepared:', JSON.stringify(cvContent, null, 2).substring(0, 500));
+
+  // Appeler l'IA pour créer le mapping
+  const prompt = `Tu es un expert en génération de CV. Tu dois créer un document Word qui combine le contenu du CV avec la structure du template.
+
+**Structure du template identifiée:**
+${JSON.stringify(templateStructure, null, 2)}
+
+**Contenu du CV à insérer:**
+${JSON.stringify(cvContent, null, 2)}
+
+Ta tâche: Créer un mapping précis qui indique:
+1. Où placer chaque section du CV dans le template
+2. Comment formater chaque élément pour respecter le style du template
+3. Quelles données du CV correspondent à quelles sections du template
+
+Réponds en JSON avec cette structure:
+{
+  "mapping": {
+    "header": {
+      "trigram": "${cvContent.trigram}",
+      "title": "${cvContent.title}"
+    },
+    "competences": [
+      // Pour chaque compétence, indiquer category et items
+    ],
+    "missions": [
+      // Pour chaque mission, indiquer tous les champs
+    ],
+    "formations": [
+      // Pour chaque formation, indiquer tous les champs
+    ]
+  },
+  "instructions": "Instructions spécifiques pour adapter le contenu au template"
+}`;
+
+  console.log('[generateCVWithAI] Calling Lovable AI for mapping...');
+
+  const aiResponse = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${LOVABLE_API_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: 'google/gemini-2.5-flash',
+      messages: [
+        {
+          role: 'user',
+          content: prompt
+        }
+      ],
+      response_format: { type: 'json_object' },
+      temperature: 0.1
+    }),
+  });
+
+  if (!aiResponse.ok) {
+    const errorText = await aiResponse.text();
+    console.error('[generateCVWithAI] AI API error:', aiResponse.status, errorText);
+    // Fallback: utiliser directement les données sans mapping IA
+    console.log('[generateCVWithAI] Falling back to direct mapping');
+    return generateWithDirectMapping(templateBuffer, cvContent);
+  }
+
+  const aiResult = await aiResponse.json();
+  const mappingText = aiResult.choices[0].message.content;
+  console.log('[generateCVWithAI] AI mapping received');
+
+  let mapping;
+  try {
+    mapping = JSON.parse(mappingText);
+  } catch (e) {
+    console.error('[generateCVWithAI] Failed to parse AI response, using fallback');
+    return generateWithDirectMapping(templateBuffer, cvContent);
+  }
+
+  console.log('[generateCVWithAI] Applying AI mapping to template...');
+  
+  // Utiliser docxtemplater pour remplir le template avec le mapping IA
+  const zip = new PizZip(templateBuffer);
+  const doc = new Docxtemplater(zip, {
+    paragraphLoop: true,
+    linebreaks: true,
+  });
+
+  // Remplir avec les données mappées par l'IA
+  const templateData = mapping.mapping || cvContent;
+  
+  console.log('[generateCVWithAI] Rendering template with data...');
+  try {
+    doc.render(templateData);
+    console.log('[generateCVWithAI] Template rendered successfully');
+  } catch (renderError: any) {
+    console.error('[generateCVWithAI] Render error:', renderError);
+    throw new Error(`Template rendering failed: ${renderError?.message || 'Unknown error'}`);
+  }
+
+  // Générer le fichier final
+  const generatedBuffer = doc.getZip().generate({
+    type: 'uint8array',
+    compression: 'DEFLATE'
+  });
+
+  console.log('[generateCVWithAI] CV generated successfully, size:', generatedBuffer.length);
+  return generatedBuffer;
+}
+
+/**
+ * Génère le CV avec un mapping direct (fallback si l'IA échoue)
+ */
+function generateWithDirectMapping(
+  templateBuffer: Uint8Array,
+  cvData: any
+): Uint8Array {
+  console.log('[generateWithDirectMapping] Using direct mapping...');
+  
+  const zip = new PizZip(templateBuffer);
+  const doc = new Docxtemplater(zip, {
+    paragraphLoop: true,
+    linebreaks: true,
+  });
+
+  console.log('[generateWithDirectMapping] Rendering with CV data...');
+  doc.render(cvData);
+
+  const generatedBuffer = doc.getZip().generate({
+    type: 'uint8array',
+    compression: 'DEFLATE'
+  });
+
+  console.log('[generateWithDirectMapping] Generated, size:', generatedBuffer.length);
+  return generatedBuffer;
+}
