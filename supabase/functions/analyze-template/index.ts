@@ -229,9 +229,10 @@ function extractSectionsAndSubcategories(
 }
 
 async function analyzeDocxTemplate(arrayBuffer: ArrayBuffer, templateId: string, supabase: any, userId: string) {
-  const { value: html, messages } = await convert({ arrayBuffer });
-  if (messages.length > 0) {
-    console.warn('Mammoth conversion warnings:', messages);
+  const result = await mammoth.convertToHtml({ arrayBuffer });
+  const html = result.value;
+  if (result.messages && result.messages.length > 0) {
+    console.warn('Mammoth conversion warnings:', result.messages);
   }
 
   const parser = new DOMParser();
