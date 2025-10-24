@@ -237,6 +237,9 @@ async function analyzeDocxTemplate(arrayBuffer: ArrayBuffer, templateId: string,
 
   const parser = new DOMParser();
   const doc = parser.parseFromString(html, 'text/html');
+  if (!doc) {  // ⬅️ ADD THESE 3 LINES
+  throw new Error('Failed to parse HTML document');
+  }
   const paragraphs = doc.querySelectorAll('p');
 
   const allColors = new Set<string>();
