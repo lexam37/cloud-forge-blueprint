@@ -1,7 +1,16 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.75.0";
 import { z } from "https://deno.land/x/zod@v3.21.4/mod.ts";
-import { Document, Packer, Paragraph, TextRun, AlignmentType, HeadingLevel, UnderlineType } from "https://esm.sh/docx@8.5.0";
+import { 
+  Document, 
+  Packer, 
+  Paragraph, 
+  TextRun, 
+  AlignmentType, 
+  HeadingLevel,
+  UnderlineType,
+  convertInchesToTwip
+} from "https://esm.sh/docx@8.5.0";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -51,10 +60,11 @@ serve(async (req: Request) => {
 
     if (!extractedData) throw new Error('No extracted data found in CV document');
 
-    console.log('Generating DOCX from extracted data...');
+    console.log('Generating DOCX from extracted data with template styles...');
 
-    // Create document sections
+    // Génération avec styles du template
     const sections: Paragraph[] = [];
+    const templateStyles = templateStructure?.detailedStyles || {};
 
     // Header section
     sections.push(
@@ -241,10 +251,19 @@ serve(async (req: Request) => {
       );
     }
 
-    // Create the document
+    // Create the document with proper margins
     const doc = new Document({
       sections: [{
-        properties: {},
+        properties: {
+          page: {
+            margin: {
+              top: convertInchesToTwip(1),
+              right: convertInchesToTwip(0.79),
+              bottom: convertInchesToTwip(1),
+              left: convertInchesToTwip(0.79)
+            }
+          }
+        },
         children: sections
       }]
     });
