@@ -137,8 +137,15 @@ export const FileUploadSection = ({ onUploadSuccess }: FileUploadSectionProps) =
       updateStep('extract', 'active');
 
       // Appeler la fonction backend pour traiter le CV
+      // CORRECTION : Récupérer explicitement le JWT pour éviter les erreurs "bad_jwt"
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error('Session expirée, veuillez vous reconnecter');
+      
       const { data, error: processError } = await supabase.functions.invoke('process-cv', {
-        body: { cvDocumentId: cvDoc.id }
+        body: { cvDocumentId: cvDoc.id },
+        headers: {
+          Authorization: `Bearer ${session.access_token}`
+        }
       });
 
       if (processError) {

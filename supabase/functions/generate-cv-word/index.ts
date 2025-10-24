@@ -155,19 +155,20 @@ serve(async (req: Request) => {
       return generatedBuffer;
     }
 
-      try {
-        const generatedBuffer = await generateCVWithJSZip(
-          templateBuffer,
-          extractedData,
-          template.structure_data
-        );
-        console.log('[generate-cv-word] CV generated successfully');
-      } catch (genError) {
-        console.error('[generate-cv-word] Generation failed:', genError);
-        throw new Error(`CV generation failed: ${genError.message}`);
-      }
-      
-    console.log('[generate-cv-word] CV generated successfully');
+    // CORRECTION CRITIQUE : Déclarer generatedBuffer AVANT le try pour éviter le scope error
+    let generatedBuffer: Uint8Array;
+    
+    try {
+      generatedBuffer = await generateCVWithJSZip(
+        templateBuffer,
+        extractedData,
+        template.structure_data
+      );
+      console.log('[generate-cv-word] CV generated successfully');
+    } catch (genError) {
+      console.error('[generate-cv-word] Generation failed:', genError);
+      throw new Error(`CV generation failed: ${genError instanceof Error ? genError.message : 'Unknown error'}`);
+    }
 
     // Upload du fichier généré
     const trigram = (extractedData as any)?.header?.trigram || 'XXX';
