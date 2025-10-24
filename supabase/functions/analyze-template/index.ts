@@ -537,6 +537,29 @@ async function analyzeTemplateStructure(fileData: Blob, templateId: string, supa
     }
   };
 
+  console.log('[analyzeTemplateStructure] Creating template with placeholders...');
+  
+  // Créer un template avec placeholders
+  const modifiedTemplate = await createTemplateWithPlaceholders(zip, sections, extractedContent);
+  
+  // Sauvegarder le template modifié dans le storage
+  const templateFileName = `template-with-placeholders-${templateId}-${Date.now()}.docx`;
+  const templatePath = `${userId}/${templateFileName}`;
+  
+  const { error: uploadError } = await supabase.storage
+    .from('cv-templates')
+    .upload(templatePath, modifiedTemplate, {
+      contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      upsert: true
+    });
+
+  if (uploadError) {
+    console.error('[analyzeTemplateStructure] Failed to upload template with placeholders:', uploadError);
+  } else {
+    console.log('[analyzeTemplateStructure] Template with placeholders uploaded:', templatePath);
+    (structure as any).templateWithPlaceholdersPath = templatePath;
+  }
+
   console.log('[analyzeTemplateStructure] Saving to database...');
   
   await supabase
@@ -548,4 +571,87 @@ async function analyzeTemplateStructure(fileData: Blob, templateId: string, supa
   console.log('[analyzeTemplateStructure] Analysis complete, structure saved');
   
   return structure;
+}
+
+/**
+ * Crée un template avec des placeholders docxtemplater en remplaçant le contenu exemple
+ */
+async function createTemplateWithPlaceholders(
+  zipContent: any,
+  sections: Array<{ name: string; startIndex: number; endIndex: number; titleStyle: DetailedStyle }>,
+  extractedContent: Array<{ text: string; style: DetailedStyle }>
+): Promise<Uint8Array> {
+  console.log('[createTemplateWithPlaceholders] Creating template with placeholders...');
+  
+  // Extraire le document.xml
+  const documentXml = await zipContent.file('word/document.xml')?.async('string');
+  if (!documentXml) {
+    throw new Error('document.xml not found in template');
+  }
+
+  let modifiedXml = documentXml;
+
+  // Remplacer le contenu de chaque section par des placeholders
+  const competencesSection = sections.find(s => s.name === 'Compétences');
+  if (competencesSection) {
+    // Remplacer les compétences par un loop docxtemplater
+    modifiedXml = modifiedXml.replace(
+      /(<w:p[^>]*>.*?)(Développement|JAVA|Python|JavaScript|Web|SQL|Agile|Scrum|Leadership|Management|Communication|Angular|React|Node\.js|Docker|Kubernetes|AWS|Azure|GCP|Git|Jenkins|CI\/CD)(.*?<\/w:p>)/gis,
+      '$1{#competences}{category}: {items}{/competences}$3'
+    );
+  }
+
+  const experienceSection = sections.find(s => s.name === 'Expérience');
+  if (experienceSection) {
+    // Remplacer les expériences par un loop
+    modifiedXml = modifiedXml.replace(
+      /(<w:p[^>]*>.*?)(\d{2}\/\d{4}\s*-\s*\d{2}\/\d{4}.*?@.*?)(.*?<\/w:p>)/gis,
+      '$1{#missions}{period} {role} @ {client}{/missions}$3'
+    );
+    
+    // Remplacer les contextes
+    modifiedXml = modifiedXml.replace(
+      /(<w:p[^>]*>.*?)Contexte\s*:(.*?)(.*?<\/w:p>)/gis,
+      '$1Contexte: {context}$3'
+    );
+    
+    // Remplacer les environnements
+    modifiedXml = modifiedXml.replace(
+      /(<w:p[^>]*>.*?)Environnement\s*:(.*?)(.*?<\/w:p>)/gis,
+      '$1Environnement: {environment}$3'
+    );
+  }
+
+  const formationSection = sections.find(s => s.name === 'Formations & Certifications');
+  if (formationSection) {
+    // Remplacer les formations
+    modifiedXml = modifiedXml.replace(
+      /(<w:p[^>]*>.*?)(\d{4})\s+(.*?)(Master|License|Ingénieur|Bachelor|MBA|Certification)(.*?)(.*?<\/w:p>)/gis,
+      '$1{#formations}{year} {degree}{/formations}$6'
+    );
+  }
+
+  // Remplacer le trigramme (généralement en haut)
+  modifiedXml = modifiedXml.replace(
+    /(<w:p[^>]*>.*?)([A-Z]{3})(\s*<\/w:t>)/gi,
+    '$1{trigram}$3'
+  );
+
+  // Remplacer le titre professionnel
+  modifiedXml = modifiedXml.replace(
+    /(<w:p[^>]*>.*?)(Consultant|Développeur|Chef de projet|Manager|Ingénieur|Architecte)(.*?)(Senior|Junior|Expert|Lead)?(.*?)(.*?<\/w:p>)/gis,
+    '$1{title}$6'
+  );
+
+  console.log('[createTemplateWithPlaceholders] Placeholders inserted, creating new DOCX...');
+
+  // Mettre à jour le document.xml dans le ZIP
+  zipContent.file('word/document.xml', modifiedXml);
+
+  // Générer le nouveau DOCX
+  const generatedBuffer = await zipContent.generateAsync({ type: 'uint8array' });
+
+  console.log('[createTemplateWithPlaceholders] Template with placeholders created successfully');
+  
+  return generatedBuffer;
 }
