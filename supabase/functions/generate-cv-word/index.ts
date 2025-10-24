@@ -148,6 +148,7 @@ async function generateCVWithAIXML(
   templateStructure: any
 ): Promise<Uint8Array> {
   console.log('[generateCV] Starting CV generation with simple replacement...');
+  console.log('[generateCV] CV Data:', JSON.stringify(cvData, null, 2));
 
   // Charger le template comme ZIP
   const zip = await JSZip.loadAsync(templateBuffer);
@@ -247,6 +248,9 @@ function replaceSectionContent(
   items: any[],
   itemType: string
 ): string {
+  console.log(`[replaceSectionContent] Attempting to replace section: ${sectionTitle} with ${items.length} items`);
+  console.log(`[replaceSectionContent] Items:`, JSON.stringify(items, null, 2));
+  
   // Trouver le titre de la section
   const titlePattern = new RegExp(`<w:t[^>]*>${escapeRegex(sectionTitle)}</w:t>`, 'i');
   const titleMatch = xml.match(titlePattern);
@@ -255,24 +259,46 @@ function replaceSectionContent(
     console.log(`[replaceSectionContent] Section title not found: ${sectionTitle}`);
     return xml;
   }
+  
+  console.log(`[replaceSectionContent] Found section title at position`);
 
   // Trouver le paragraphe du titre
   const titleIndex = xml.indexOf(titleMatch[0]);
   const beforeTitle = xml.substring(0, titleIndex);
   const afterTitle = xml.substring(titleIndex);
   
-  // Trouver le prochain paragraphe après le titre (c'est l'exemple)
-  const exampleParagraphMatch = afterTitle.match(/<w:p\b[^>]*>[\s\S]*?<\/w:p>/);
+  // Trouver tous les paragraphes après le titre jusqu'à la prochaine section
+  // On cherche les paragraphes qui contiennent du texte (pas vides)
+  const paragraphMatches = afterTitle.matchAll(/<w:p\b[^>]*>[\s\S]*?<\/w:p>/g);
+  const paragraphs = Array.from(paragraphMatches);
   
-  if (!exampleParagraphMatch) {
-    console.log(`[replaceSectionContent] Example paragraph not found after: ${sectionTitle}`);
+  if (paragraphs.length < 2) {
+    console.log(`[replaceSectionContent] Not enough paragraphs found after: ${sectionTitle}`);
     return xml;
   }
-
-  const exampleParagraph = exampleParagraphMatch[0];
-  const exampleStart = afterTitle.indexOf(exampleParagraph);
+  
+  // Le premier paragraphe est le titre, on prend le deuxième comme exemple
+  const titleParagraphEnd = paragraphs[0].index! + paragraphs[0][0].length;
+  const exampleParagraph = paragraphs[1][0];
+  const exampleStart = paragraphs[1].index!;
+  
+  console.log(`[replaceSectionContent] Using paragraph as template, length: ${exampleParagraph.length}`);
+  
+  // Trouver où se termine cette série d'exemples (avant la prochaine section ou fin)
+  // On va chercher le prochain titre de section ou la fin du document
+  const nextSectionPattern = /<w:p[^>]*>[\s\S]*?<w:t[^>]*>[A-Z][^<]*<\/w:t>[\s\S]*?<\/w:p>/g;
+  const nextSectionMatch = afterTitle.substring(exampleStart + exampleParagraph.length).match(nextSectionPattern);
+  
+  let afterExamples: string;
+  if (nextSectionMatch) {
+    const nextSectionIndex = afterTitle.indexOf(nextSectionMatch[0], exampleStart + exampleParagraph.length);
+    afterExamples = afterTitle.substring(nextSectionIndex);
+  } else {
+    // Si pas de prochaine section, on garde tout ce qui reste
+    afterExamples = afterTitle.substring(exampleStart + exampleParagraph.length);
+  }
+  
   const beforeExample = afterTitle.substring(0, exampleStart);
-  const afterExample = afterTitle.substring(exampleStart + exampleParagraph.length);
 
   // Générer les nouveaux paragraphes
   let newParagraphs = '';
@@ -281,23 +307,52 @@ function replaceSectionContent(
     let newParagraph = exampleParagraph;
     
     if (itemType === 'competence') {
-      // Remplacer le texte de la compétence
-      newParagraph = newParagraph.replace(/<w:t[^>]*>.*?<\/w:t>/, `<w:t>${item}</w:t>`);
+      // Remplacer le texte de la compétence - remplacer TOUTES les occurrences de <w:t>
+      const textPattern = /<w:t[^>]*>([^<]*)<\/w:t>/g;
+      let replaced = false;
+      newParagraph = newParagraph.replace(textPattern, (match, content) => {
+        if (!replaced && content.trim()) {
+          replaced = true;
+          return match.replace(content, item);
+        }
+        return match;
+      });
+      console.log(`[replaceSectionContent] Generated competence paragraph for: ${item}`);
     } else if (itemType === 'mission') {
       // Remplacer les informations de la mission
-      newParagraph = newParagraph.replace(/<w:t[^>]*>.*?<\/w:t>/, 
-        `<w:t>${item.title} - ${item.client} (${item.period})</w:t>`);
+      const missionText = `${item.title} - ${item.client} (${item.period})`;
+      const textPattern = /<w:t[^>]*>([^<]*)<\/w:t>/g;
+      let replaced = false;
+      newParagraph = newParagraph.replace(textPattern, (match, content) => {
+        if (!replaced && content.trim()) {
+          replaced = true;
+          return match.replace(content, missionText);
+        }
+        return match;
+      });
+      console.log(`[replaceSectionContent] Generated mission paragraph for: ${item.title}`);
     } else if (itemType === 'formation') {
       // Remplacer les informations de la formation
-      newParagraph = newParagraph.replace(/<w:t[^>]*>.*?<\/w:t>/, 
-        `<w:t>${item.title} - ${item.institution} (${item.year})</w:t>`);
+      const formationText = `${item.title} - ${item.institution} (${item.year})`;
+      const textPattern = /<w:t[^>]*>([^<]*)<\/w:t>/g;
+      let replaced = false;
+      newParagraph = newParagraph.replace(textPattern, (match, content) => {
+        if (!replaced && content.trim()) {
+          replaced = true;
+          return match.replace(content, formationText);
+        }
+        return match;
+      });
+      console.log(`[replaceSectionContent] Generated formation paragraph for: ${item.title}`);
     }
     
     newParagraphs += newParagraph;
   }
+  
+  console.log(`[replaceSectionContent] Generated ${items.length} new paragraphs`);
 
   // Reconstruire le XML
-  return beforeTitle + titleMatch[0] + beforeExample + newParagraphs + afterExample;
+  return beforeTitle + titleMatch[0] + beforeExample + newParagraphs + afterExamples;
 }
 
 /**
