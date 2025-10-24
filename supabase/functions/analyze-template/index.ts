@@ -70,24 +70,38 @@ serve(async (req: Request) => {
     const { data: { user }, error: authError } = await supabase.auth.getUser(jwt);
     if (authError || !user) throw new Error('User not authenticated');
 
+    console.log('Fetching template for user:', user.id);
+    
     const { data: template, error: templateError } = await supabase
       .from('cv_templates')
-      .select('template_file_path')
+      .select('file_path')
       .eq('id', templateId)
       .eq('user_id', user.id) // RLS
       .single();
 
-    if (templateError || !template) throw new Error('Template not found or not owned by user');
+    console.log('Template query result:', { template, templateError });
+
+    if (templateError || !template) {
+      throw new Error(`Template not found or not owned by user: ${templateError?.message || 'No template data'}`);
+    }
+
+    console.log('Downloading template file from storage:', template.file_path);
 
     const { data: templateFileData, error: fileError } = await supabase
       .storage
-      .from('cv_templates')
-      .download(template.template_file_path);
+      .from('cv-templates')
+      .download(template.file_path);
 
-    if (fileError || !templateFileData) throw new Error('Failed to download template file');
+    console.log('File download result:', { hasData: !!templateFileData, fileError });
 
+    if (fileError || !templateFileData) {
+      throw new Error(`Failed to download template file: ${fileError?.message || 'No file data'}`);
+    }
+
+    console.log('Starting template analysis...');
     const arrayBuffer = await templateFileData.arrayBuffer();
     const structureData = await analyzeDocxTemplate(arrayBuffer, templateId, supabase, user.id);
+    console.log('Template analysis complete');
 
     await supabase.from('processing_logs').insert({
       cv_document_id: null,
