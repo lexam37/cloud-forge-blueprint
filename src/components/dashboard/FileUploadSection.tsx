@@ -25,10 +25,7 @@ export const FileUploadSection = ({ onUploadSuccess }: FileUploadSectionProps) =
     { id: 'upload', label: 'Upload du fichier', status: 'pending' },
     { id: 'save', label: 'Enregistrement', status: 'pending' },
     { id: 'extract', label: 'Extraction des données', status: 'pending' },
-    { id: 'anonymize', label: 'Anonymisation (trigramme + suppression infos perso)', status: 'pending' },
-    { id: 'template', label: 'Application du template', status: 'pending' },
-    { id: 'commercial', label: 'Ajout coordonnées commercial', status: 'pending' },
-    { id: 'complete', label: 'Finalisation', status: 'pending' },
+    { id: 'anonymize', label: 'Anonymisation et génération', status: 'pending' },
   ]);
   const { toast } = useToast();
 
@@ -52,10 +49,7 @@ export const FileUploadSection = ({ onUploadSuccess }: FileUploadSectionProps) =
       { id: 'upload', label: 'Upload du fichier', status: 'pending' },
       { id: 'save', label: 'Enregistrement', status: 'pending' },
       { id: 'extract', label: 'Extraction des données', status: 'pending' },
-      { id: 'anonymize', label: 'Anonymisation (trigramme + suppression infos perso)', status: 'pending' },
-      { id: 'template', label: 'Application du template', status: 'pending' },
-      { id: 'commercial', label: 'Ajout coordonnées commercial', status: 'pending' },
-      { id: 'complete', label: 'Finalisation', status: 'pending' },
+      { id: 'anonymize', label: 'Anonymisation et génération', status: 'pending' },
     ]);
   };
 
@@ -155,38 +149,10 @@ export const FileUploadSection = ({ onUploadSuccess }: FileUploadSectionProps) =
 
       updateStep('extract', 'completed');
       
-      // Étape 4: Anonymisation (déjà faite par l'IA)
+      // Étape 4: Anonymisation et génération (tout fait par process-cv)
       updateStep('anonymize', 'active');
-      await new Promise(resolve => setTimeout(resolve, 300));
-      updateStep('anonymize', 'completed');
-      
-      // Étape 5: Application du template
-      updateStep('template', 'active');
-      
-      // Générer le CV Word avec le template
-      const { error: generateError } = await supabase.functions.invoke('generate-cv-word', {
-        body: { cvDocumentId: cvDoc.id }
-      });
-
-      if (generateError) {
-        console.error('Generate error:', generateError);
-        updateStep('template', 'error');
-        throw new Error(generateError.message || 'Erreur lors de l\'application du template');
-      }
-
-      updateStep('template', 'completed');
-      
-      // Étape 6: Ajout coordonnées commercial (fait lors de la génération)
-      updateStep('commercial', 'active');
-      await new Promise(resolve => setTimeout(resolve, 300));
-      updateStep('commercial', 'completed');
-      
-      // Étape 7: Finalisation
-      updateStep('complete', 'active');
-      
       await new Promise(resolve => setTimeout(resolve, 500));
-      
-      updateStep('complete', 'completed');
+      updateStep('anonymize', 'completed');
 
       toast({
         title: "✅ CV traité avec succès !",

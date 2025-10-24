@@ -258,70 +258,44 @@ export const CVHistoryList = () => {
 
   const handleDownloadWord = async (cv: CVDocument) => {
     try {
-      // Vérifier si le fichier est déjà généré
-      if (cv.generated_file_path && cv.generated_file_type === 'docx') {
+      if (!cv.generated_file_path) {
         toast({
-          title: "Téléchargement en cours...",
-          description: "Récupération du fichier",
+          variant: "destructive",
+          title: "Erreur",
+          description: "Fichier non généré. Veuillez uploader à nouveau le CV.",
         });
-
-        // Télécharger directement le fichier existant
-        const { data: fileData, error: downloadError } = await supabase.storage
-          .from('cv-generated')
-          .download(cv.generated_file_path);
-
-        if (downloadError) throw downloadError;
-
-        const url = URL.createObjectURL(fileData);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `DC-${cv.id.substring(0, 8)}.docx`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-
-        toast({
-          title: "✅ Téléchargement réussi",
-          description: "Dossier de compétences téléchargé",
-        });
-      } else {
-        // Générer le fichier si pas déjà fait
-        toast({
-          title: "Génération du dossier de compétences...",
-          description: "Première génération (cela peut prendre quelques secondes)",
-        });
-
-        const { data, error: functionError } = await supabase.functions.invoke('generate-cv-word', {
-          body: { cvDocumentId: cv.id }
-        });
-
-        if (functionError) throw functionError;
-
-        // Télécharger le fichier nouvellement généré
-        const { data: fileData, error: downloadError } = await supabase.storage
-          .from('cv-generated')
-          .download(data.file_path);
-
-        if (downloadError) throw downloadError;
-
-        const url = URL.createObjectURL(fileData);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `DC-${cv.id.substring(0, 8)}.docx`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-
-        toast({
-          title: "✅ Téléchargement réussi",
-          description: "Dossier de compétences téléchargé",
-        });
-
-        // Recharger la liste pour mettre à jour le statut
-        fetchCVDocuments();
+        return;
       }
+
+      toast({
+        title: "Téléchargement en cours...",
+        description: "Récupération du fichier",
+      });
+
+      // Télécharger directement le fichier déjà généré
+      const { data: fileData, error: downloadError } = await supabase.storage
+        .from('cv-generated')
+        .download(cv.generated_file_path);
+
+      if (downloadError) throw downloadError;
+
+      const trigram = (cv.extracted_data as any)?.header?.trigram || 'XXX';
+      const title = (cv.extracted_data as any)?.header?.title?.replace(/[^a-zA-Z0-9]/g, '_') || 'Poste';
+      const fileName = `${trigram}_DC_${title}.docx`;
+
+      const url = URL.createObjectURL(fileData);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      toast({
+        title: "✅ Téléchargement réussi",
+        description: "Dossier de compétences téléchargé",
+      });
     } catch (error) {
       console.error('Error downloading Word:', error);
       toast({
@@ -424,7 +398,9 @@ export const CVHistoryList = () => {
 
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-2">
-                    <h3 className="font-semibold truncate">{cv.original_file_name}</h3>
+                    <h3 className="font-semibold truncate">
+                      {(cv.extracted_data as any)?.header?.trigram || 'XXX'} - {(cv.extracted_data as any)?.header?.title || cv.original_file_name}
+                    </h3>
                     <Badge variant={getStatusVariant(cv.status || 'uploaded')} className="flex items-center gap-1">
                       {getStatusIcon(cv.status || 'uploaded')}
                       <span>{getStatusLabel(cv.status || 'uploaded')}</span>
@@ -434,13 +410,13 @@ export const CVHistoryList = () => {
                   {cv.extracted_data && typeof cv.extracted_data === 'object' && (
                     <div className="text-sm text-muted-foreground space-y-1 mb-2">
                       <p>
-                        <strong>Candidat:</strong> {(cv.extracted_data as any).personal?.anonymized_first}. {(cv.extracted_data as any).personal?.anonymized_last}.
+                        <strong>Trigramme:</strong> {(cv.extracted_data as any).header?.trigram || 'N/A'}
                       </p>
                       <p>
-                        <strong>Poste:</strong> {(cv.extracted_data as any).personal?.title}
+                        <strong>Poste:</strong> {(cv.extracted_data as any).header?.title || 'N/A'}
                       </p>
                       <p>
-                        <strong>Expérience:</strong> {(cv.extracted_data as any).personal?.years_experience} ans
+                        <strong>Expérience:</strong> {(cv.extracted_data as any).personal?.years_experience || 0} ans
                       </p>
                     </div>
                   )}

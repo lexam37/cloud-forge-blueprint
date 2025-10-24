@@ -115,13 +115,47 @@ serve(async (req: Request) => {
 
     console.log('[process-cv] AI processing complete');
 
-    // Sauvegarde des résultats avec le template_id
-    const processingTime = Date.now() - startTime;
+    // Sauvegarde temporaire des données extraites
     await supabase
       .from('cv_documents')
       .update({ 
         extracted_data: extractedData,
         template_id: activeTemplate?.id || null,
+        status: 'analyzing'
+      })
+      .eq('id', cvDocumentId)
+      .eq('user_id', user.id);
+
+    // Générer immédiatement le CV Word
+    console.log('[process-cv] Starting Word generation...');
+    await supabase.from('processing_logs').insert({
+      cv_document_id: cvDocumentId,
+      step: 'generation',
+      message: 'Starting Word CV generation',
+      user_id: user.id
+    });
+
+    const { data: generateData, error: generateError } = await supabase.functions.invoke('generate-cv-word', {
+      body: { cvDocumentId }
+    });
+
+    if (generateError) {
+      console.error('[process-cv] Generation error:', generateError);
+      await supabase.from('processing_logs').insert({
+        cv_document_id: cvDocumentId,
+        step: 'error',
+        message: `Word generation failed: ${generateError.message}`,
+        user_id: user.id
+      });
+      throw new Error(`Word generation failed: ${generateError.message}`);
+    }
+
+    const processingTime = Date.now() - startTime;
+    
+    // Mise à jour finale avec statut completed
+    await supabase
+      .from('cv_documents')
+      .update({ 
         status: 'processed',
         processing_time_ms: processingTime
       })
@@ -130,18 +164,21 @@ serve(async (req: Request) => {
 
     await supabase.from('processing_logs').insert({
       cv_document_id: cvDocumentId,
-      step: 'extraction',
-      message: 'CV data extracted successfully',
+      step: 'complete',
+      message: 'CV processing completed successfully',
       details: { processing_time_ms: processingTime },
       user_id: user.id
     });
+
+    console.log('[process-cv] Complete processing finished in', processingTime, 'ms');
 
     return new Response(
       JSON.stringify({ 
         success: true,
         cvDocumentId,
         extractedData,
-        processingTimeMs: processingTime
+        processingTimeMs: processingTime,
+        generatedFilePath: generateData?.file_path
       }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
