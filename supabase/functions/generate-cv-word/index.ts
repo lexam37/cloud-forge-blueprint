@@ -90,6 +90,8 @@ serve(async (req: Request) => {
 
     // Charger le template
     const zip = new PizZip(templateBuffer);
+    
+    console.log('[generate-cv-word] Creating Docxtemplater instance...');
     const doc = new Docxtemplater(zip, {
       paragraphLoop: true,
       linebreaks: true,
@@ -137,7 +139,15 @@ serve(async (req: Request) => {
     console.log('[generate-cv-word] Template data prepared:', JSON.stringify(templateData, null, 2));
 
     // Remplir le template
-    doc.render(templateData);
+    console.log('[generate-cv-word] Rendering template with data...');
+    try {
+      doc.render(templateData);
+      console.log('[generate-cv-word] Template rendered successfully');
+    } catch (renderError: any) {
+      console.error('[generate-cv-word] Error rendering template:', renderError);
+      console.error('[generate-cv-word] Docxtemplater errors:', doc.getFullText ? doc.getFullText() : 'N/A');
+      throw new Error(`Template rendering failed: ${renderError?.message || 'Unknown error'}`);
+    }
 
     // Générer le fichier final
     const generatedBuffer = doc.getZip().generate({

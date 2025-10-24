@@ -546,6 +546,8 @@ async function analyzeTemplateStructure(fileData: Blob, templateId: string, supa
   const templateFileName = `template-with-placeholders-${templateId}-${Date.now()}.docx`;
   const templatePath = `${userId}/${templateFileName}`;
   
+  console.log('[analyzeTemplateStructure] Uploading template with placeholders to:', templatePath);
+  
   const { error: uploadError } = await supabase.storage
     .from('cv-templates')
     .upload(templatePath, modifiedTemplate, {
@@ -555,20 +557,28 @@ async function analyzeTemplateStructure(fileData: Blob, templateId: string, supa
 
   if (uploadError) {
     console.error('[analyzeTemplateStructure] Failed to upload template with placeholders:', uploadError);
-  } else {
-    console.log('[analyzeTemplateStructure] Template with placeholders uploaded:', templatePath);
-    (structure as any).templateWithPlaceholdersPath = templatePath;
+    throw new Error(`Failed to upload template with placeholders: ${uploadError.message}`);
   }
 
-  console.log('[analyzeTemplateStructure] Saving to database...');
+  console.log('[analyzeTemplateStructure] Template with placeholders uploaded successfully:', templatePath);
   
-  await supabase
+  // Ajouter le chemin du template avec placeholders à la structure
+  (structure as any).templateWithPlaceholdersPath = templatePath;
+
+  console.log('[analyzeTemplateStructure] Saving to database with templateWithPlaceholdersPath:', templatePath);
+  
+  const { error: updateError } = await supabase
     .from('cv_templates')
     .update({ structure_data: structure })
     .eq('id', templateId)
     .eq('user_id', userId);
 
-  console.log('[analyzeTemplateStructure] Analysis complete, structure saved');
+  if (updateError) {
+    console.error('[analyzeTemplateStructure] Failed to update database:', updateError);
+    throw new Error(`Failed to update database: ${updateError.message}`);
+  }
+
+  console.log('[analyzeTemplateStructure] Analysis complete, structure saved with placeholder template');
   
   return structure;
 }
