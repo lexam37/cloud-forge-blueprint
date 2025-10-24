@@ -107,7 +107,10 @@ serve(async (req: Request) => {
     try {
       const arrayBuffer = await cvFileData.arrayBuffer();
       if (fileType === 'docx' || fileType === 'doc') {
-        const { value: html } = await convert({ arrayBuffer });
+        const html = result.value;
+        if (result.messages && result.messages.length > 0) {
+          console.warn('Mammoth conversion warnings:', result.messages);
+        }
         console.log('Extracted HTML from CV:', html.substring(0, 500));
 
         const parser = new DOMParser();
