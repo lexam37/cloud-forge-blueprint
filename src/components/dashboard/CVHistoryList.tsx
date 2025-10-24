@@ -273,14 +273,14 @@ export const CVHistoryList = () => {
       // Télécharger le fichier généré
       const { data: fileData, error: downloadError } = await supabase.storage
         .from('cv-generated')
-        .download(data.filePath);
+        .download(data.file_path);
 
       if (downloadError) throw downloadError;
 
       const url = URL.createObjectURL(fileData);
       const a = document.createElement('a');
       a.href = url;
-      a.download = data.fileName || 'DC.docx';
+      a.download = `DC-${cv.id.substring(0, 8)}.docx`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
