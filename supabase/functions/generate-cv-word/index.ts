@@ -100,19 +100,15 @@ serve(async (req: Request) => {
     console.log('[generate-cv-word] Template downloaded, size:', templateBuffer.byteLength, 'bytes');
 
     /**
-     * NOUVELLE APPROCHE : Génération par RÉINJECTION avec STYLES PAR RÉFÉRENCE
-     * Étapes :
-     * 1. Charger le template original (pas de copie, on garde tout)
-     * 2. Identifier les zones de contenu à remplacer (sections)
-     * 3. Créer de nouveaux paragraphes en APPLIQUANT les styles existants par référence
-     * 4. Insérer le contenu transformé avec les bons styleIds
+     * NOUVELLE APPROCHE : Génération par CLONAGE DE PARAGRAPHES
+     * Principe : on extrait des paragraphes exemples du template et on les clone avec tout leur style
      */
     async function generateCVWithJSZip(
       templateBuffer: ArrayBuffer,
       cvData: any,
       templateStructure: any
     ) {
-      console.log('[generateCVWithJSZip] Starting STYLE-BASED generation...');
+      console.log('[generateCVWithJSZip] Starting PARAGRAPH CLONING generation...');
       console.log('[generateCVWithJSZip] Template structure:', JSON.stringify(templateStructure, null, 2));
       
       const zip = new JSZip();
@@ -126,63 +122,66 @@ serve(async (req: Request) => {
       
       let modifiedXml = docXml;
       
-      // ÉTAPE 1 : Remplacer l'en-tête (trigramme et titre) avec leurs styles
+      // ÉTAPE 1 : Remplacer l'en-tête (trigramme et titre) - on trouve le texte et on le remplace dans les balises <w:t>
       if (templateStructure?.header?.hasTrigramme) {
-        const trigramStyleId = templateStructure.header.trigramStyleId || 'Normal';
-        modifiedXml = replaceWithStyle(modifiedXml, /CVA|Trigramme|XXX/g, cvData.header?.trigram || 'XXX', trigramStyleId);
-        console.log('[generateCVWithJSZip] Replaced trigram with style:', trigramStyleId);
+        modifiedXml = replaceTextInXml(modifiedXml, ['CVA', 'Trigramme', 'XXX'], cvData.header?.trigram || 'XXX');
+        console.log('[generateCVWithJSZip] Replaced trigram:', cvData.header?.trigram);
       }
       
       if (templateStructure?.header?.hasTitle) {
-        const titleStyleId = templateStructure.header.titleStyleId || 'Normal';
-        modifiedXml = replaceWithStyle(
+        modifiedXml = replaceTextInXml(
           modifiedXml, 
-          /Analyste Fonctionnel \/ Product Owner|Titre du poste/g,
-          cvData.header?.title || 'Poste',
-          titleStyleId
+          ['Analyste Fonctionnel / Product Owner', 'Analyste Fonctionnel \/ Product Owner', 'Titre du poste'],
+          cvData.header?.title || 'Poste'
         );
-        console.log('[generateCVWithJSZip] Replaced title with style:', titleStyleId);
+        console.log('[generateCVWithJSZip] Replaced title:', cvData.header?.title);
       }
       
-      // ÉTAPE 2 : Générer les SECTIONS avec leurs styles
+      // ÉTAPE 2 : Traiter les SECTIONS en extrayant et clonant les paragraphes
       for (const section of templateStructure?.sections || []) {
-        console.log('[generateCVWithJSZip] Processing section:', section.name);
+        console.log('[generateCVWithJSZip] Processing section:', section.name, 'with title:', section.title);
         
         if (section.placeholderType === 'competences' && cvData.skills?.subcategories) {
-          // Générer les compétences avec les styles appropriés
-          const competencesXml = generateSkillsSection(
-            cvData.skills.subcategories,
-            section.contentStyleIds || ['Normal'],
-            section.formatting
-          );
+          // Extraire un paragraphe exemple de la section Compétences
+          const exampleParagraph = extractExampleParagraph(modifiedXml, section.title);
+          console.log('[generateCVWithJSZip] Extracted example paragraph for skills, length:', exampleParagraph?.length);
           
-          // Trouver et remplacer la section compétences
-          modifiedXml = replaceSectionContent(modifiedXml, section.title, competencesXml);
-          console.log('[generateCVWithJSZip] Generated skills section with styles');
+          if (exampleParagraph) {
+            const competencesXml = generateSkillsFromExample(
+              cvData.skills.subcategories,
+              exampleParagraph
+            );
+            modifiedXml = replaceSectionContent(modifiedXml, section.title, competencesXml);
+            console.log('[generateCVWithJSZip] Generated skills section with cloned styles');
+          }
         }
         
         if (section.placeholderType === 'missions' && cvData.missions) {
-          // Générer les missions avec les styles appropriés
-          const missionsXml = generateMissionsSection(
-            cvData.missions,
-            section.contentStyleIds || ['Normal'],
-            section.formatting
-          );
+          const exampleParagraphs = extractMultipleExampleParagraphs(modifiedXml, section.title, 2);
+          console.log('[generateCVWithJSZip] Extracted', exampleParagraphs.length, 'example paragraphs for missions');
           
-          modifiedXml = replaceSectionContent(modifiedXml, section.title, missionsXml);
-          console.log('[generateCVWithJSZip] Generated missions section with styles');
+          if (exampleParagraphs.length > 0) {
+            const missionsXml = generateMissionsFromExample(
+              cvData.missions,
+              exampleParagraphs
+            );
+            modifiedXml = replaceSectionContent(modifiedXml, section.title, missionsXml);
+            console.log('[generateCVWithJSZip] Generated missions section with cloned styles');
+          }
         }
         
         if (section.placeholderType === 'formations' && cvData.education) {
-          // Générer les formations avec les styles appropriés
-          const educationXml = generateEducationSection(
-            cvData.education,
-            section.contentStyleIds || ['Normal'],
-            section.formatting
-          );
+          const exampleParagraph = extractExampleParagraph(modifiedXml, section.title);
+          console.log('[generateCVWithJSZip] Extracted example paragraph for education, length:', exampleParagraph?.length);
           
-          modifiedXml = replaceSectionContent(modifiedXml, section.title, educationXml);
-          console.log('[generateCVWithJSZip] Generated education section with styles');
+          if (exampleParagraph) {
+            const educationXml = generateEducationFromExample(
+              cvData.education,
+              exampleParagraph
+            );
+            modifiedXml = replaceSectionContent(modifiedXml, section.title, educationXml);
+            console.log('[generateCVWithJSZip] Generated education section with cloned styles');
+          }
         }
       }
       
@@ -203,56 +202,161 @@ serve(async (req: Request) => {
     }
     
     /**
-     * Remplace du texte en préservant/appliquant un style spécifique
+     * Remplace du texte dans les balises <w:t> en préservant tous les styles XML environnants
      */
-    function replaceWithStyle(xml: string, pattern: RegExp, replacement: string, styleId: string): string {
-      return xml.replace(pattern, replacement);
+    function replaceTextInXml(xml: string, searchTexts: string[], replacement: string): string {
+      let result = xml;
+      for (const searchText of searchTexts) {
+        // Chercher <w:t>TexteRecherché</w:t> ou <w:t xml:space="preserve">TexteRecherché</w:t>
+        const regex = new RegExp(`(<w:t[^>]*>)(${escapeRegex(searchText)})(<\/w:t>)`, 'gi');
+        result = result.replace(regex, `$1${escapeXml(replacement)}$3`);
+      }
+      return result;
     }
     
     /**
-     * Génère le XML pour la section Compétences avec les bons styles
+     * Extrait un paragraphe exemple d'une section pour le cloner
      */
-    function generateSkillsSection(subcategories: any[], styleIds: string[], formatting: any): string {
-      const primaryStyleId = styleIds[0] || 'Normal';
+    function extractExampleParagraph(xml: string, sectionTitle: string): string | null {
+      console.log('[extractExampleParagraph] Extracting for section:', sectionTitle);
+      
+      // Décoder les entités XML dans le titre pour la recherche
+      const decodedTitle = decodeXmlEntities(sectionTitle);
+      const titleVariations = [sectionTitle, decodedTitle, sectionTitle.replace('&', '&amp;')];
+      
+      let sectionStart = -1;
+      let foundTitle = '';
+      
+      // Chercher le titre de section avec toutes les variations
+      for (const title of titleVariations) {
+        const escapedTitle = escapeRegex(title);
+        const titleRegex = new RegExp(`<w:t[^>]*>${escapedTitle}<\/w:t>`, 'i');
+        const match = titleRegex.exec(xml);
+        if (match) {
+          sectionStart = match.index;
+          foundTitle = title;
+          break;
+        }
+      }
+      
+      if (sectionStart === -1) {
+        console.warn('[extractExampleParagraph] Could not find section title:', sectionTitle);
+        return null;
+      }
+      
+      console.log('[extractExampleParagraph] Found section title:', foundTitle, 'at position:', sectionStart);
+      
+      // Trouver le paragraphe qui suit le titre (premier <w:p> après le titre)
+      const afterTitle = xml.substring(sectionStart);
+      const nextParagraphMatch = /<w:p[^>]*>[\s\S]*?<\/w:p>/.exec(afterTitle);
+      
+      if (!nextParagraphMatch) {
+        console.warn('[extractExampleParagraph] No paragraph found after title');
+        return null;
+      }
+      
+      // Chercher le deuxième paragraphe (le premier est le titre lui-même)
+      const afterFirstP = afterTitle.substring(nextParagraphMatch.index + nextParagraphMatch[0].length);
+      const secondParagraphMatch = /<w:p[^>]*>[\s\S]*?<\/w:p>/.exec(afterFirstP);
+      
+      if (secondParagraphMatch) {
+        console.log('[extractExampleParagraph] Extracted paragraph, length:', secondParagraphMatch[0].length);
+        return secondParagraphMatch[0];
+      }
+      
+      return null;
+    }
+    
+    /**
+     * Extrait plusieurs paragraphes exemples d'une section
+     */
+    function extractMultipleExampleParagraphs(xml: string, sectionTitle: string, count: number): string[] {
+      console.log('[extractMultipleExampleParagraphs] Extracting', count, 'paragraphs for:', sectionTitle);
+      
+      const decodedTitle = decodeXmlEntities(sectionTitle);
+      const titleVariations = [sectionTitle, decodedTitle, sectionTitle.replace('&', '&amp;')];
+      
+      let sectionStart = -1;
+      
+      for (const title of titleVariations) {
+        const escapedTitle = escapeRegex(title);
+        const titleRegex = new RegExp(`<w:t[^>]*>${escapedTitle}<\/w:t>`, 'i');
+        const match = titleRegex.exec(xml);
+        if (match) {
+          sectionStart = match.index;
+          break;
+        }
+      }
+      
+      if (sectionStart === -1) {
+        console.warn('[extractMultipleExampleParagraphs] Could not find section title');
+        return [];
+      }
+      
+      const paragraphs: string[] = [];
+      let searchFrom = sectionStart;
+      
+      // Extraire les N premiers paragraphes après le titre
+      for (let i = 0; i < count + 1; i++) { // +1 pour ignorer le paragraphe titre
+        const afterSection = xml.substring(searchFrom);
+        const paragraphMatch = /<w:p[^>]*>[\s\S]*?<\/w:p>/.exec(afterSection);
+        
+        if (!paragraphMatch) break;
+        
+        if (i > 0) { // Ignorer le premier (titre)
+          paragraphs.push(paragraphMatch[0]);
+        }
+        
+        searchFrom += paragraphMatch.index + paragraphMatch[0].length;
+      }
+      
+      console.log('[extractMultipleExampleParagraphs] Extracted', paragraphs.length, 'paragraphs');
+      return paragraphs;
+    }
+    
+    /**
+     * Génère la section Compétences en clonant le paragraphe exemple
+     */
+    function generateSkillsFromExample(subcategories: any[], exampleParagraph: string): string {
       let xml = '';
       
       for (const cat of subcategories) {
         const text = `${cat.name}: ${cat.items.join(', ')}`;
-        xml += createParagraphWithStyle(text, primaryStyleId, formatting);
+        xml += cloneParagraphWithNewText(exampleParagraph, text);
       }
       
       return xml;
     }
     
     /**
-     * Génère le XML pour la section Missions avec les bons styles
+     * Génère la section Missions en clonant les paragraphes exemples
      */
-    function generateMissionsSection(missions: any[], styleIds: string[], formatting: any): string {
-      const titleStyleId = styleIds[0] || 'Normal';
-      const contentStyleId = styleIds[1] || 'Normal';
+    function generateMissionsFromExample(missions: any[], exampleParagraphs: string[]): string {
+      const titleParagraph = exampleParagraphs[0] || exampleParagraphs[0];
+      const contentParagraph = exampleParagraphs[1] || exampleParagraphs[0];
       let xml = '';
       
       for (const mission of missions) {
         // Titre de mission
         const missionTitle = `${mission.date_start} - ${mission.date_end} ${mission.role} @ ${mission.client}`;
-        xml += createParagraphWithStyle(missionTitle, titleStyleId, { bold: true });
+        xml += cloneParagraphWithNewText(titleParagraph, missionTitle);
         
         // Contexte
         if (mission.context) {
-          xml += createParagraphWithStyle(`Contexte: ${mission.context}`, contentStyleId, formatting);
+          xml += cloneParagraphWithNewText(contentParagraph, `Contexte: ${mission.context}`);
         }
         
         // Missions (liste à puces)
         if (mission.achievements) {
           for (const achievement of mission.achievements) {
-            xml += createParagraphWithStyle(achievement, contentStyleId, { ...formatting, hasBullets: true });
+            xml += cloneParagraphWithNewText(contentParagraph, achievement);
           }
         }
         
         // Environnement
         if (mission.environment) {
           const envText = `Environnement: ${Array.isArray(mission.environment) ? mission.environment.join(', ') : mission.environment}`;
-          xml += createParagraphWithStyle(envText, contentStyleId, formatting);
+          xml += cloneParagraphWithNewText(contentParagraph, envText);
         }
       }
       
@@ -260,68 +364,70 @@ serve(async (req: Request) => {
     }
     
     /**
-     * Génère le XML pour la section Formations avec les bons styles
+     * Génère la section Formations en clonant le paragraphe exemple
      */
-    function generateEducationSection(education: any[], styleIds: string[], formatting: any): string {
-      const styleId = styleIds[0] || 'Normal';
+    function generateEducationFromExample(education: any[], exampleParagraph: string): string {
       let xml = '';
       
       for (const edu of education) {
         const text = `${edu.year} - ${edu.degree} - ${edu.institution}`;
-        xml += createParagraphWithStyle(text, styleId, formatting);
+        xml += cloneParagraphWithNewText(exampleParagraph, text);
       }
       
       return xml;
     }
     
     /**
-     * Crée un paragraphe Word XML avec un style spécifique
+     * Clone un paragraphe XML et remplace uniquement le texte dans les balises <w:t>
+     * Préserve TOUS les attributs de style (police, taille, couleur, espacement, etc.)
      */
-    function createParagraphWithStyle(text: string, styleId: string, formatting: any): string {
-      const numPr = formatting?.hasBullets ? `<w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr>` : '';
-      const bold = formatting?.bold ? '<w:b/>' : '';
-      
-      return `<w:p>
-        <w:pPr>
-          <w:pStyle w:val="${styleId}"/>
-          ${numPr}
-        </w:pPr>
-        <w:r>
-          <w:rPr>${bold}</w:rPr>
-          <w:t>${escapeXml(text)}</w:t>
-        </w:r>
-      </w:p>`;
+    function cloneParagraphWithNewText(paragraphXml: string, newText: string): string {
+      // Remplacer tout le contenu des balises <w:t>...</w:t> par le nouveau texte
+      return paragraphXml.replace(/(<w:t[^>]*>)[^<]*(<\/w:t>)/g, `$1${escapeXml(newText)}$2`);
     }
     
     /**
-     * Remplace le contenu d'une section en trouvant son titre
-     * NOUVELLE APPROCHE : Identifier la section et remplacer tout son contenu jusqu'à la prochaine section
+     * Remplace le contenu d'une section en trouvant son titre (gère les entités XML)
      */
     function replaceSectionContent(xml: string, sectionTitle: string, newContent: string): string {
       console.log('[replaceSectionContent] Searching for section:', sectionTitle);
       
-      // Échapper les caractères spéciaux dans le titre
-      const escapedTitle = sectionTitle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      // Gérer les variations du titre (avec entités XML décodées/encodées)
+      const decodedTitle = decodeXmlEntities(sectionTitle);
+      const titleVariations = [
+        sectionTitle,
+        decodedTitle,
+        sectionTitle.replace('&', '&amp;'),
+        sectionTitle.replace('&amp;', '&')
+      ];
       
-      // ÉTAPE 1 : Trouver le paragraphe contenant le titre de section
-      // On cherche <w:t>TitreSection</w:t> dans n'importe quel paragraphe
-      const titleRegex = new RegExp(`(<w:p[^>]*>(?:[\\s\\S]*?)<w:t[^>]*>)(${escapedTitle})(<\/w:t>(?:[\\s\\S]*?)<\/w:p>)`, 'i');
-      const titleMatch = titleRegex.exec(xml);
+      let titleMatch: RegExpExecArray | null = null;
+      let foundTitle = '';
+      
+      // Essayer de trouver le titre avec toutes les variations
+      for (const title of titleVariations) {
+        const escapedTitle = escapeRegex(title);
+        const titleRegex = new RegExp(`(<w:p[^>]*>(?:[\\s\\S]*?)<w:t[^>]*>)(${escapedTitle})(<\/w:t>(?:[\\s\\S]*?)<\/w:p>)`, 'i');
+        titleMatch = titleRegex.exec(xml);
+        
+        if (titleMatch) {
+          foundTitle = title;
+          break;
+        }
+      }
       
       if (!titleMatch) {
-        console.warn('[replaceSectionContent] Could not find section title:', sectionTitle);
+        console.warn('[replaceSectionContent] Could not find section title with any variation:', sectionTitle);
         return xml;
       }
       
-      console.log('[replaceSectionContent] Found section title at position:', titleMatch.index);
+      console.log('[replaceSectionContent] Found section title:', foundTitle, 'at position:', titleMatch.index);
       
-      // ÉTAPE 2 : Trouver la fin de cette section
-      // La fin = le prochain paragraphe qui contient un titre de grande taille OU la fin du document
+      // Trouver la fin de cette section (prochaine section ou fin du body)
       const afterTitle = xml.substring(titleMatch.index + titleMatch[0].length);
       
-      // Chercher le prochain titre de section (paragraphe avec une taille de police ≥ 14pt ou style Heading)
-      // Ou chercher des patterns de titre communs : "Compétences", "Expérience", "Formations"
-      const nextSectionRegex = /<w:p[^>]*>(?:[\\s\\S]*?)<w:t[^>]*>(?:Compétences|Expérience|Formations|Formation|Certifications|Langues|Projets|Éducation|Contact|Profil)<\/w:t>(?:[\\s\\S]*?)<\/w:p>/i;
+      // Chercher le prochain titre de section
+      const nextSectionRegex = /<w:p[^>]*>(?:[\s\S]*?)<w:t[^>]*>(?:Compétences|Expérience|Formations?|Certifications?|Langues?|Projets?|Éducation|Contact|Profil)<\/w:t>(?:[\s\S]*?)<\/w:p>/i;
       const nextSectionMatch = nextSectionRegex.exec(afterTitle);
       
       let sectionEndIndex;
@@ -329,19 +435,18 @@ serve(async (req: Request) => {
         sectionEndIndex = titleMatch.index + titleMatch[0].length + nextSectionMatch.index;
         console.log('[replaceSectionContent] Found next section at position:', sectionEndIndex);
       } else {
-        // Pas de prochaine section = aller jusqu'à la fin du body
         const bodyEndMatch = /<\/w:body>/.exec(xml);
         sectionEndIndex = bodyEndMatch ? bodyEndMatch.index : xml.length;
         console.log('[replaceSectionContent] No next section found, using end of body:', sectionEndIndex);
       }
       
-      // ÉTAPE 3 : Construire le nouveau XML
+      // Construire le nouveau XML
       const beforeSection = xml.substring(0, titleMatch.index + titleMatch[0].length);
       const afterSection = xml.substring(sectionEndIndex);
       
       const result = beforeSection + '\n' + newContent + '\n' + afterSection;
       
-      console.log('[replaceSectionContent] Successfully replaced section:', sectionTitle);
+      console.log('[replaceSectionContent] Successfully replaced section');
       console.log('[replaceSectionContent] Content length:', {
         before: titleMatch.index,
         newContent: newContent.length,
@@ -361,6 +466,25 @@ serve(async (req: Request) => {
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&apos;');
+    }
+    
+    /**
+     * Décode les entités XML
+     */
+    function decodeXmlEntities(text: string): string {
+      return text
+        .replace(/&amp;/g, '&')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&quot;/g, '"')
+        .replace(/&apos;/g, "'");
+    }
+    
+    /**
+     * Échappe les caractères spéciaux pour les regex
+     */
+    function escapeRegex(text: string): string {
+      return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     }
 
     // CORRECTION CRITIQUE : Déclarer generatedBuffer AVANT le try pour éviter le scope error
