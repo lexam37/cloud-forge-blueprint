@@ -319,10 +319,12 @@ async function generateCVWithJSZip(
 function extractSectionParagraphs(xml: string, sectionTitle: string, maxCount: number = 20): string[] {
   console.log(`[extractSectionParagraphs] Extracting paragraphs for: "${sectionTitle}"`);
   
-  // Trouver le titre de section - essayer d'abord le titre complet
+  // Titres de sections principaux à reconnaître
+  const sectionTitles = ['Compétences', 'Formations', 'Certifications', 'Expérience', 'Formation'];
+  
+  // Trouver le titre de section
   let titlePos = findTextPosition(xml, sectionTitle);
   
-  // Si non trouvé, essayer juste le premier mot (ex: "Formations" au lieu de "Formations & Certifications")
   if (titlePos === -1) {
     const words = sectionTitle.split(/[\s&]+/).filter(w => w.length > 2);
     if (words.length > 0) {
@@ -352,34 +354,35 @@ function extractSectionParagraphs(xml: string, sectionTitle: string, maxCount: n
   currentPos = titlePEnd + 6;
   console.log(`[extractSectionParagraphs] Starting paragraph extraction from position: ${currentPos}`);
   
-  // Extraire les paragraphes jusqu'à trouver le prochain titre de section
+  // Extraire les paragraphes jusqu'à trouver une vraie section principale
   for (let i = 0; i < maxCount; i++) {
     const pStart = xml.indexOf('<w:p', currentPos);
-    if (pStart === -1) {
-      break;
-    }
+    if (pStart === -1) break;
     
     const pEnd = xml.indexOf('</w:p>', pStart);
-    if (pEnd === -1) {
-      break;
-    }
+    if (pEnd === -1) break;
     
     const paragraph = xml.substring(pStart, pEnd + 6);
     
     // Extraire le texte du paragraphe
     const textMatches = paragraph.match(/<w:t[^>]*>([^<]+)<\/w:t>/g);
-    const paragraphText = textMatches ? textMatches.map(m => m.replace(/<[^>]+>/g, '')).join('').trim() : '';
+    const paragraphText = textMatches ? textMatches.map(m => m.replace(/<[^>]+>/g, '').replace(/&amp;/g, '&')).join('').trim() : '';
     
     console.log(`[extractSectionParagraphs] Paragraph ${i + 1} text: ${paragraphText.substring(0, 50) || '(empty)'}`);
     
-    // Vérifier si c'est un titre de section (en gras + taille >= 32)
+    // Vérifier si c'est un titre de SECTION PRINCIPALE (pas juste un sous-titre)
     const isBold = paragraph.includes('<w:b/>') || paragraph.includes('<w:b ');
     const sizeMatch = paragraph.match(/<w:sz w:val="(\d+)"\/>/);
     const fontSize = sizeMatch ? parseInt(sizeMatch[1]) : 20;
     
-    // Si c'est un titre (gras + grande taille + texte significatif), on s'arrête
-    if (isBold && fontSize >= 32 && paragraphText.length > 3) {
-      console.log(`[extractSectionParagraphs] Found next section title "${paragraphText.substring(0, 30)}", stopping`);
+    // Vérifier si le texte correspond à un titre de section principal connu
+    const isSectionTitle = sectionTitles.some(title => 
+      paragraphText.toLowerCase().includes(title.toLowerCase())
+    );
+    
+    // S'arrêter SEULEMENT si c'est clairement un titre de section principale
+    if (isBold && fontSize >= 32 && isSectionTitle && paragraphText.length > 3) {
+      console.log(`[extractSectionParagraphs] Found next main section "${paragraphText.substring(0, 30)}", stopping`);
       break;
     }
     
@@ -655,15 +658,15 @@ function replaceSectionContent(xml: string, sectionTitle: string, newContent: st
   
   const contentStart = pEnd + 6;
   
-  // Trouver la fin de la section en cherchant le prochain titre de section
+  // Trouver la fin de la section - chercher le prochain titre de section PRINCIPALE
+  const sectionTitles = ['Compétences', 'Formations', 'Certifications', 'Expérience', 'Formation'];
   let contentEnd = xml.indexOf('</w:body>', contentStart);
   
-  // Chercher le prochain paragraphe avec du texte formaté comme un titre (gras + grande taille)
   let searchPos = contentStart;
-  const maxSearch = 100; // Limiter la recherche à 100 paragraphes
+  const maxSearch = 100;
   
   for (let i = 0; i < maxSearch; i++) {
-    const nextPStart = xml.indexOf('<w:p ', searchPos);
+    const nextPStart = xml.indexOf('<w:p', searchPos);
     if (nextPStart === -1 || nextPStart >= contentEnd) break;
     
     const nextPEnd = xml.indexOf('</w:p>', nextPStart);
@@ -671,16 +674,22 @@ function replaceSectionContent(xml: string, sectionTitle: string, newContent: st
     
     const paragraph = xml.substring(nextPStart, nextPEnd + 6);
     
-    // Vérifier si c'est un titre (en gras + taille >= 32)
+    // Vérifier si c'est un titre de section PRINCIPALE
     const isBold = paragraph.includes('<w:b/>') || paragraph.includes('<w:b ');
     const sizeMatch = paragraph.match(/<w:sz w:val="(\d+)"\/>/);
     const fontSize = sizeMatch ? parseInt(sizeMatch[1]) : 20;
     
-    // Extraire le texte pour vérifier s'il est significatif
+    // Extraire le texte
     const textMatches = paragraph.match(/<w:t[^>]*>([^<]+)<\/w:t>/g);
-    const text = textMatches ? textMatches.map(m => m.replace(/<[^>]+>/g, '')).join('').trim() : '';
+    const text = textMatches ? textMatches.map(m => m.replace(/<[^>]+>/g, '').replace(/&amp;/g, '&')).join('').trim() : '';
     
-    if (isBold && fontSize >= 32 && text.length > 3) {
+    // Vérifier si c'est un titre de section principal connu
+    const isSectionTitle = sectionTitles.some(title => 
+      text.toLowerCase().includes(title.toLowerCase())
+    );
+    
+    // S'arrêter SEULEMENT pour un vrai titre de section principale
+    if (isBold && fontSize >= 32 && isSectionTitle && text.length > 3) {
       console.log(`[replaceSectionContent] Found next section at ${nextPStart}, text: "${text.substring(0, 30)}"`);
       contentEnd = nextPStart;
       break;
