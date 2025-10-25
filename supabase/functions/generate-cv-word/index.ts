@@ -128,7 +128,8 @@ serve(async (req: Request) => {
     const { error: updateError } = await supabase
       .from('cv_documents')
       .update({
-        output_file_path: filePath,
+        generated_file_path: filePath,
+        status: 'completed',
         updated_at: new Date().toISOString()
       })
       .eq('id', cvDocumentId);
@@ -299,23 +300,19 @@ async function generateCVWithJSZip(
 function extractSectionParagraphs(xml: string, sectionTitle: string, maxCount: number = 3): string[] {
   console.log(`[extractSectionParagraphs] Extracting paragraphs for: "${sectionTitle}"`);
   
-  // Dump du XML pour debug (premiers 2000 caractères après position 6000 où se trouve généralement le contenu)
-  const debugSnippet = xml.substring(6000, 8000);
-  console.log(`[extractSectionParagraphs] XML snippet for debug:`, debugSnippet.substring(0, 500));
+  // Trouver le titre de section - essayer d'abord le titre complet
+  let titlePos = findTextPosition(xml, sectionTitle);
   
-  // Trouver le titre de section
-  const titlePos = findTextPosition(xml, sectionTitle);
+  // Si non trouvé, essayer juste le premier mot (ex: "Formations" au lieu de "Formations & Certifications")
   if (titlePos === -1) {
-    console.warn(`[extractSectionParagraphs] Section not found: "${sectionTitle}"`);
-    // Essayer de chercher juste le mot principal
-    const mainWord = sectionTitle.split(' ')[0];
-    console.log(`[extractSectionParagraphs] Trying to find just "${mainWord}"...`);
-    const altPos = findTextPosition(xml, mainWord);
-    if (altPos !== -1) {
-      console.log(`[extractSectionParagraphs] Found main word at position: ${altPos}`);
-      console.log(`[extractSectionParagraphs] Context:`, xml.substring(Math.max(0, altPos - 100), altPos + 200));
+    const mainWord = sectionTitle.split(/[\s&]+/)[0]; // Split par espace ou &
+    console.log(`[extractSectionParagraphs] Section not found: "${sectionTitle}", trying main word: "${mainWord}"`);
+    titlePos = findTextPosition(xml, mainWord);
+    
+    if (titlePos === -1) {
+      console.warn(`[extractSectionParagraphs] Could not find section with title "${sectionTitle}" or main word "${mainWord}"`);
+      return [];
     }
-    return [];
   }
   
   console.log(`[extractSectionParagraphs] Found section at position: ${titlePos}`);
@@ -391,7 +388,7 @@ function findTextPosition(xml: string, text: string): number {
   for (const variant of variations) {
     const escapedVariant = escapeRegex(variant);
     
-    // Chercher dans les balises <w:t>
+    // Chercher dans les balises <w:t> (exact match)
     const regex1 = new RegExp(`<w:t[^>]*>${escapedVariant}</w:t>`, 'i');
     const match1 = xml.match(regex1);
     if (match1 && match1.index !== undefined) {
@@ -399,11 +396,12 @@ function findTextPosition(xml: string, text: string): number {
       return match1.index;
     }
     
-    // Chercher le texte brut (peut être divisé entre plusieurs <w:t>)
-    const simpleRegex = new RegExp(escapedVariant, 'i');
-    const match2 = xml.match(simpleRegex);
+    // Chercher le texte partiel (peut être divisé entre plusieurs <w:t>)
+    // Par exemple "Formations" pourrait matcher "Formations & Certifications"
+    const partialRegex = new RegExp(`<w:t[^>]*>[^<]*${escapedVariant}[^<]*</w:t>`, 'i');
+    const match2 = xml.match(partialRegex);
     if (match2 && match2.index !== undefined) {
-      console.log(`[findTextPosition] Found raw text "${variant}" at position ${match2.index}`);
+      console.log(`[findTextPosition] Found partial match with variant "${variant}" at position ${match2.index}`);
       return match2.index;
     }
   }
