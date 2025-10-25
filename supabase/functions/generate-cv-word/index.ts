@@ -497,7 +497,7 @@ function generateSkillsSection(competences: any[], templateParagraphs: string[])
     }
   }
   
-  return result.join('\n');
+  return result.join('');
 }
 
 /**
@@ -512,7 +512,7 @@ function generateSkillsSectionFromSubcategories(subcategories: any[], templatePa
     result.push(cloneParagraphWithText(baseParagraph, text));
   }
   
-  return result.join('\n');
+  return result.join('');
 }
 
 /**
@@ -539,7 +539,7 @@ function generateFormationsSection(formations: any[], templateParagraphs: string
     result.push(cloneParagraphWithText(baseParagraph, text));
   }
   
-  return result.join('\n');
+  return result.join('');
 }
 
 /**
@@ -554,7 +554,7 @@ function generateEducationSection(education: any[], templateParagraphs: string[]
     result.push(cloneParagraphWithText(baseParagraph, text.trim()));
   }
   
-  return result.join('\n');
+  return result.join('');
 }
 
 /**
@@ -601,7 +601,7 @@ function generateMissionsSection(missions: any[], templateParagraphs: string[]):
     }
   }
   
-  return result.join('\n');
+  return result.join('');
 }
 
 /**
@@ -690,12 +690,16 @@ function replaceSectionContent(xml: string, sectionTitle: string, newContent: st
   }
   
   console.log(`[replaceSectionContent] Content range: ${contentStart} to ${contentEnd} (${contentEnd - contentStart} chars)`);
+  console.log(`[replaceSectionContent] Inserting new content of length: ${newContent.length}`);
   
-  // Construire le nouveau XML
+  // Construire le nouveau XML - concaténer directement sans newlines
   const before = xml.substring(0, contentStart);
   const after = xml.substring(contentEnd);
+  const result = before + newContent + after;
   
-  return before + '\n' + newContent + '\n' + after;
+  console.log(`[replaceSectionContent] XML length change: ${result.length - xml.length}`);
+  
+  return result;
 }
 
 /**
