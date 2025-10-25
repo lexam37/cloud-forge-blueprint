@@ -191,17 +191,47 @@ async function generateCVWithJSZip(
   // === REMPLACEMENT HEADER ===
   // Trigramme
   if (cvData.trigramme) {
+    // Chercher et remplacer le trigramme (peut être CVA ou autre)
     const trigramRegex = /<w:t[^>]*>CVA<\/w:t>/g;
-    modifiedXml = modifiedXml.replace(trigramRegex, `<w:t>${escapeXml(cvData.trigramme)}</w:t>`);
-    console.log('[generateCVWithJSZip] Replaced trigram:', cvData.trigramme);
+    if (modifiedXml.match(trigramRegex)) {
+      modifiedXml = modifiedXml.replace(trigramRegex, `<w:t>${escapeXml(cvData.trigramme)}</w:t>`);
+      console.log('[generateCVWithJSZip] Replaced trigram CVA with:', cvData.trigramme);
+    } else {
+      // Si CVA n'est pas trouvé, chercher les 3 premières lettres majuscules
+      const genericTrigramRegex = /<w:t[^>]*>[A-Z]{3}<\/w:t>/;
+      const match = modifiedXml.match(genericTrigramRegex);
+      if (match) {
+        modifiedXml = modifiedXml.replace(genericTrigramRegex, `<w:t>${escapeXml(cvData.trigramme)}</w:t>`);
+        console.log('[generateCVWithJSZip] Replaced generic trigram with:', cvData.trigramme);
+      }
+    }
   }
   
   // Titre du poste
   if (cvData.titre_poste || cvData.header?.title) {
     const title = cvData.titre_poste || cvData.header?.title;
-    const titleRegex = /<w:t[^>]*>Analyste Fonctionnel \/ Product Owner<\/w:t>/g;
-    modifiedXml = modifiedXml.replace(titleRegex, `<w:t>${escapeXml(title)}</w:t>`);
-    console.log('[generateCVWithJSZip] Replaced title:', title);
+    // Chercher plusieurs variations possibles du titre
+    const titleVariations = [
+      'Analyste Fonctionnel / Product Owner',
+      'Analyste Fonctionnel \\/ Product Owner',
+      'Architecte Cloud &amp; Expert Big Data',
+      'Architecte Cloud & Expert Big Data'
+    ];
+    
+    let replaced = false;
+    for (const titleVar of titleVariations) {
+      const titleRegex = new RegExp(`<w:t[^>]*>${escapeRegex(titleVar)}</w:t>`, 'g');
+      if (modifiedXml.match(titleRegex)) {
+        modifiedXml = modifiedXml.replace(titleRegex, `<w:t>${escapeXml(title)}</w:t>`);
+        console.log('[generateCVWithJSZip] Replaced title:', title);
+        replaced = true;
+        break;
+      }
+    }
+    
+    if (!replaced) {
+      console.warn('[generateCVWithJSZip] Could not find title to replace');
+    }
   }
   
   // === REMPLACEMENT DES SECTIONS ===
@@ -267,16 +297,29 @@ async function generateCVWithJSZip(
  * Extrait les paragraphes complets d'une section avec leur XML de style
  */
 function extractSectionParagraphs(xml: string, sectionTitle: string, maxCount: number = 3): string[] {
-  console.log(`[extractSectionParagraphs] Extracting paragraphs for: ${sectionTitle}`);
+  console.log(`[extractSectionParagraphs] Extracting paragraphs for: "${sectionTitle}"`);
+  
+  // Dump du XML pour debug (premiers 2000 caractères après position 6000 où se trouve généralement le contenu)
+  const debugSnippet = xml.substring(6000, 8000);
+  console.log(`[extractSectionParagraphs] XML snippet for debug:`, debugSnippet.substring(0, 500));
   
   // Trouver le titre de section
   const titlePos = findTextPosition(xml, sectionTitle);
   if (titlePos === -1) {
-    console.warn(`[extractSectionParagraphs] Section not found: ${sectionTitle}`);
+    console.warn(`[extractSectionParagraphs] Section not found: "${sectionTitle}"`);
+    // Essayer de chercher juste le mot principal
+    const mainWord = sectionTitle.split(' ')[0];
+    console.log(`[extractSectionParagraphs] Trying to find just "${mainWord}"...`);
+    const altPos = findTextPosition(xml, mainWord);
+    if (altPos !== -1) {
+      console.log(`[extractSectionParagraphs] Found main word at position: ${altPos}`);
+      console.log(`[extractSectionParagraphs] Context:`, xml.substring(Math.max(0, altPos - 100), altPos + 200));
+    }
     return [];
   }
   
   console.log(`[extractSectionParagraphs] Found section at position: ${titlePos}`);
+  console.log(`[extractSectionParagraphs] Context:`, xml.substring(Math.max(0, titlePos - 50), titlePos + 150));
   
   // Extraire les paragraphes qui suivent
   const paragraphs: string[] = [];
@@ -284,18 +327,33 @@ function extractSectionParagraphs(xml: string, sectionTitle: string, maxCount: n
   
   // Sauter le paragraphe du titre
   const titlePEnd = xml.indexOf('</w:p>', currentPos);
-  if (titlePEnd === -1) return [];
+  if (titlePEnd === -1) {
+    console.warn('[extractSectionParagraphs] Could not find end of title paragraph');
+    return [];
+  }
   currentPos = titlePEnd + 6;
+  console.log(`[extractSectionParagraphs] Starting paragraph extraction from position: ${currentPos}`);
   
   // Extraire les N paragraphes suivants
   for (let i = 0; i < maxCount; i++) {
     const pStart = xml.indexOf('<w:p', currentPos);
-    if (pStart === -1) break;
+    if (pStart === -1) {
+      console.log(`[extractSectionParagraphs] No more paragraphs found (iteration ${i})`);
+      break;
+    }
     
     const pEnd = xml.indexOf('</w:p>', pStart);
-    if (pEnd === -1) break;
+    if (pEnd === -1) {
+      console.log(`[extractSectionParagraphs] Could not find paragraph end (iteration ${i})`);
+      break;
+    }
     
     const paragraph = xml.substring(pStart, pEnd + 6);
+    
+    // Extraire le texte du paragraphe pour debug
+    const textMatch = paragraph.match(/<w:t[^>]*>([^<]+)<\/w:t>/);
+    const paragraphText = textMatch ? textMatch[1] : '(no text)';
+    console.log(`[extractSectionParagraphs] Paragraph ${i + 1} text:`, paragraphText.substring(0, 100));
     
     // Vérifier que ce n'est pas une nouvelle section (titre en gras)
     const hasNextSectionTitle = /<w:t[^>]*>(?:Compétences|Expérience|Formations?|Certifications?|Langues?|Profil|Contact|Éducation|Projets?)<\/w:t>/i.test(paragraph);
@@ -316,20 +374,41 @@ function extractSectionParagraphs(xml: string, sectionTitle: string, maxCount: n
  * Trouve la position d'un texte dans le XML (gère les variations d'encodage)
  */
 function findTextPosition(xml: string, text: string): number {
+  console.log(`[findTextPosition] Searching for: "${text}"`);
+  
+  // Créer toutes les variations possibles du texte
   const variations = [
     text,
     text.replace(/&/g, '&amp;'),
-    text.replace(/é/g, '&#xE9;').replace(/è/g, '&#xE8;').replace(/à/g, '&#xE0;')
+    text.replace(/&amp;/g, '&'),
+    // Encoder les accents en entités XML
+    text.replace(/é/g, '&#xE9;').replace(/è/g, '&#xE8;').replace(/à/g, '&#xE0;').replace(/ê/g, '&#xEA;'),
+    // Mélanger les encodages
+    text.replace(/&/g, '&amp;').replace(/é/g, '&#xE9;').replace(/è/g, '&#xE8;').replace(/à/g, '&#xE0;')
   ];
   
+  // Essayer de trouver chaque variation
   for (const variant of variations) {
-    const regex = new RegExp(`<w:t[^>]*>${escapeRegex(variant)}</w:t>`, 'i');
-    const match = xml.match(regex);
-    if (match && match.index !== undefined) {
-      return match.index;
+    const escapedVariant = escapeRegex(variant);
+    
+    // Chercher dans les balises <w:t>
+    const regex1 = new RegExp(`<w:t[^>]*>${escapedVariant}</w:t>`, 'i');
+    const match1 = xml.match(regex1);
+    if (match1 && match1.index !== undefined) {
+      console.log(`[findTextPosition] Found with variant "${variant}" at position ${match1.index}`);
+      return match1.index;
+    }
+    
+    // Chercher le texte brut (peut être divisé entre plusieurs <w:t>)
+    const simpleRegex = new RegExp(escapedVariant, 'i');
+    const match2 = xml.match(simpleRegex);
+    if (match2 && match2.index !== undefined) {
+      console.log(`[findTextPosition] Found raw text "${variant}" at position ${match2.index}`);
+      return match2.index;
     }
   }
   
+  console.warn(`[findTextPosition] Text not found: "${text}"`);
   return -1;
 }
 
