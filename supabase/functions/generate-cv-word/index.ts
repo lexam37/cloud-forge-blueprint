@@ -191,19 +191,20 @@ async function generateCVWithJSZip(
   
   // === REMPLACEMENT HEADER ===
   // Trigramme
-  if (cvData.trigramme) {
+  const trigram = cvData.header?.trigram || cvData.trigramme;
+  if (trigram) {
     // Chercher et remplacer le trigramme (peut être CVA ou autre)
     const trigramRegex = /<w:t[^>]*>CVA<\/w:t>/g;
     if (modifiedXml.match(trigramRegex)) {
-      modifiedXml = modifiedXml.replace(trigramRegex, `<w:t>${escapeXml(cvData.trigramme)}</w:t>`);
-      console.log('[generateCVWithJSZip] Replaced trigram CVA with:', cvData.trigramme);
+      modifiedXml = modifiedXml.replace(trigramRegex, `<w:t>${escapeXml(trigram)}</w:t>`);
+      console.log('[generateCVWithJSZip] Replaced trigram CVA with:', trigram);
     } else {
       // Si CVA n'est pas trouvé, chercher les 3 premières lettres majuscules
       const genericTrigramRegex = /<w:t[^>]*>[A-Z]{3}<\/w:t>/;
       const match = modifiedXml.match(genericTrigramRegex);
       if (match) {
-        modifiedXml = modifiedXml.replace(genericTrigramRegex, `<w:t>${escapeXml(cvData.trigramme)}</w:t>`);
-        console.log('[generateCVWithJSZip] Replaced generic trigram with:', cvData.trigramme);
+        modifiedXml = modifiedXml.replace(genericTrigramRegex, `<w:t>${escapeXml(trigram)}</w:t>`);
+        console.log('[generateCVWithJSZip] Replaced generic trigram with:', trigram);
       }
     }
   }
@@ -258,22 +259,35 @@ async function generateCVWithJSZip(
     
     // Générer le contenu en fonction du type de section
     if (section.placeholderType === 'competences') {
-      if (cvData.competences) {
-        newContent = generateSkillsSection(cvData.competences, templateParagraphs);
-      } else if (cvData.skills?.subcategories) {
+      // Essayer skills.subcategories d'abord (format AI), puis competences (ancien format)
+      if (cvData.skills?.subcategories) {
+        console.log('[generateCVWithJSZip] Using skills.subcategories for competences');
         newContent = generateSkillsSectionFromSubcategories(cvData.skills.subcategories, templateParagraphs);
+      } else if (cvData.competences) {
+        console.log('[generateCVWithJSZip] Using competences array');
+        newContent = generateSkillsSection(cvData.competences, templateParagraphs);
+      } else {
+        console.warn('[generateCVWithJSZip] No competences data found');
       }
     }
     else if (section.placeholderType === 'formations') {
-      if (cvData.formations) {
-        newContent = generateFormationsSection(cvData.formations, templateParagraphs);
-      } else if (cvData.education) {
+      // Essayer education d'abord (format AI), puis formations (ancien format)
+      if (cvData.education && cvData.education.length > 0) {
+        console.log('[generateCVWithJSZip] Using education array');
         newContent = generateEducationSection(cvData.education, templateParagraphs);
+      } else if (cvData.formations && cvData.formations.length > 0) {
+        console.log('[generateCVWithJSZip] Using formations array');
+        newContent = generateFormationsSection(cvData.formations, templateParagraphs);
+      } else {
+        console.warn('[generateCVWithJSZip] No formations/education data found');
       }
     }
     else if (section.placeholderType === 'missions') {
-      if (cvData.missions) {
+      if (cvData.missions && cvData.missions.length > 0) {
+        console.log('[generateCVWithJSZip] Using missions array');
         newContent = generateMissionsSection(cvData.missions, templateParagraphs);
+      } else {
+        console.warn('[generateCVWithJSZip] No missions data found');
       }
     }
     
@@ -388,6 +402,8 @@ function findTextPosition(xml: string, text: string): number {
     cleanText.replace(/&amp;/g, '&'),
     // Encoder les accents en entités XML
     cleanText.replace(/é/g, '&#xE9;').replace(/è/g, '&#xE8;').replace(/à/g, '&#xE0;').replace(/ê/g, '&#xEA;').replace(/ô/g, '&#xF4;'),
+    // Sans accents
+    cleanText.replace(/[éèê]/g, 'e').replace(/[à]/g, 'a').replace(/[ô]/g, 'o'),
   ];
   
   // Essayer de trouver chaque variation
@@ -411,16 +427,15 @@ function findTextPosition(xml: string, text: string): number {
     }
     
     // 3. Chercher le texte qui peut être fragmenté sur plusieurs balises <w:t>
-    // Par exemple "Formations & Certifications" pourrait être en plusieurs <w:t>
-    const words = variant.split(/[\s&]+/);
+    const words = variant.split(/[\s&]+/).filter(w => w.length > 0);
     if (words.length > 1) {
       const firstWord = escapeRegex(words[0]);
       const firstWordRegex = new RegExp(`<w:t[^>]*>[^<]*${firstWord}[^<]*</w:t>`, 'i');
       const firstMatch = xml.match(firstWordRegex);
       
       if (firstMatch && firstMatch.index !== undefined) {
-        // Vérifier si les autres mots suivent dans les 500 caractères suivants
-        const searchArea = xml.substring(firstMatch.index, firstMatch.index + 500);
+        // Vérifier si les autres mots suivent dans les 1000 caractères suivants
+        const searchArea = xml.substring(firstMatch.index, firstMatch.index + 1000);
         let allWordsFound = true;
         
         for (let i = 1; i < words.length; i++) {
@@ -435,6 +450,14 @@ function findTextPosition(xml: string, text: string): number {
           console.log(`[findTextPosition] Found fragmented match starting at position ${firstMatch.index}`);
           return firstMatch.index;
         }
+      }
+    } else if (words.length === 1) {
+      // Un seul mot - chercher match partiel
+      const singleWordRegex = new RegExp(`<w:t[^>]*>[^<]*${escapedVariant}[^<]*</w:t>`, 'i');
+      const singleMatch = xml.match(singleWordRegex);
+      if (singleMatch && singleMatch.index !== undefined) {
+        console.log(`[findTextPosition] Found single word partial match at position ${singleMatch.index}`);
+        return singleMatch.index;
       }
     }
   }
