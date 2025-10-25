@@ -129,7 +129,7 @@ serve(async (req: Request) => {
       .from('cv_documents')
       .update({
         generated_file_path: filePath,
-        status: 'completed',
+        status: 'processed',
         updated_at: new Date().toISOString()
       })
       .eq('id', cvDocumentId);
@@ -208,30 +208,35 @@ async function generateCVWithJSZip(
     }
   }
   
-  // Titre du poste
+  // Titre du poste - recherche dynamique dans le header
   if (cvData.titre_poste || cvData.header?.title) {
     const title = cvData.titre_poste || cvData.header?.title;
-    // Chercher plusieurs variations possibles du titre
-    const titleVariations = [
-      'Analyste Fonctionnel / Product Owner',
-      'Analyste Fonctionnel \\/ Product Owner',
-      'Architecte Cloud &amp; Expert Big Data',
-      'Architecte Cloud & Expert Big Data'
-    ];
     
-    let replaced = false;
-    for (const titleVar of titleVariations) {
-      const titleRegex = new RegExp(`<w:t[^>]*>${escapeRegex(titleVar)}</w:t>`, 'g');
-      if (modifiedXml.match(titleRegex)) {
-        modifiedXml = modifiedXml.replace(titleRegex, `<w:t>${escapeXml(title)}</w:t>`);
-        console.log('[generateCVWithJSZip] Replaced title:', title);
-        replaced = true;
-        break;
+    // Trouver le trigramme d'abord pour localiser le header
+    const trigramPattern = /<w:t[^>]*>[A-Z]{3}<\/w:t>/;
+    const trigramMatch = modifiedXml.match(trigramPattern);
+    
+    if (trigramMatch && trigramMatch.index !== undefined) {
+      // Chercher dans les 2000 caractères suivant le trigramme
+      const searchArea = modifiedXml.substring(trigramMatch.index, trigramMatch.index + 2000);
+      
+      // Trouver le premier texte long (>10 chars) après le trigramme qui est probablement le titre
+      const titlePattern = /<w:t[^>]*>([^<]{10,})<\/w:t>/;
+      const titleMatch = searchArea.match(titlePattern);
+      
+      if (titleMatch && titleMatch[1]) {
+        const oldTitle = titleMatch[1];
+        console.log('[generateCVWithJSZip] Found title to replace:', oldTitle);
+        
+        // Remplacer ce titre spécifique
+        const replacePattern = new RegExp(`<w:t([^>]*)>${escapeRegex(oldTitle)}</w:t>`, 'g');
+        modifiedXml = modifiedXml.replace(replacePattern, `<w:t$1>${escapeXml(title)}</w:t>`);
+        console.log('[generateCVWithJSZip] Replaced title with:', title);
+      } else {
+        console.warn('[generateCVWithJSZip] Could not find title to replace in header area');
       }
-    }
-    
-    if (!replaced) {
-      console.warn('[generateCVWithJSZip] Could not find title to replace');
+    } else {
+      console.warn('[generateCVWithJSZip] Could not locate header (trigram not found)');
     }
   }
   
@@ -368,41 +373,69 @@ function extractSectionParagraphs(xml: string, sectionTitle: string, maxCount: n
 }
 
 /**
- * Trouve la position d'un texte dans le XML (gère les variations d'encodage)
+ * Trouve la position d'un texte dans le XML (gère les variations d'encodage et texte fragmenté)
  */
 function findTextPosition(xml: string, text: string): number {
   console.log(`[findTextPosition] Searching for: "${text}"`);
   
+  // Nettoyer le texte recherché
+  const cleanText = text.replace(/\s+/g, ' ').trim();
+  
   // Créer toutes les variations possibles du texte
   const variations = [
-    text,
-    text.replace(/&/g, '&amp;'),
-    text.replace(/&amp;/g, '&'),
+    cleanText,
+    cleanText.replace(/&/g, '&amp;'),
+    cleanText.replace(/&amp;/g, '&'),
     // Encoder les accents en entités XML
-    text.replace(/é/g, '&#xE9;').replace(/è/g, '&#xE8;').replace(/à/g, '&#xE0;').replace(/ê/g, '&#xEA;'),
-    // Mélanger les encodages
-    text.replace(/&/g, '&amp;').replace(/é/g, '&#xE9;').replace(/è/g, '&#xE8;').replace(/à/g, '&#xE0;')
+    cleanText.replace(/é/g, '&#xE9;').replace(/è/g, '&#xE8;').replace(/à/g, '&#xE0;').replace(/ê/g, '&#xEA;').replace(/ô/g, '&#xF4;'),
   ];
   
   // Essayer de trouver chaque variation
   for (const variant of variations) {
     const escapedVariant = escapeRegex(variant);
     
-    // Chercher dans les balises <w:t> (exact match)
-    const regex1 = new RegExp(`<w:t[^>]*>${escapedVariant}</w:t>`, 'i');
-    const match1 = xml.match(regex1);
+    // 1. Chercher match exact dans une seule balise <w:t>
+    const exactRegex = new RegExp(`<w:t[^>]*>${escapedVariant}</w:t>`, 'i');
+    const match1 = xml.match(exactRegex);
     if (match1 && match1.index !== undefined) {
-      console.log(`[findTextPosition] Found with variant "${variant}" at position ${match1.index}`);
+      console.log(`[findTextPosition] Found exact match with variant "${variant}" at position ${match1.index}`);
       return match1.index;
     }
     
-    // Chercher le texte partiel (peut être divisé entre plusieurs <w:t>)
-    // Par exemple "Formations" pourrait matcher "Formations & Certifications"
+    // 2. Chercher match partiel (texte plus long contenant notre recherche)
     const partialRegex = new RegExp(`<w:t[^>]*>[^<]*${escapedVariant}[^<]*</w:t>`, 'i');
     const match2 = xml.match(partialRegex);
     if (match2 && match2.index !== undefined) {
       console.log(`[findTextPosition] Found partial match with variant "${variant}" at position ${match2.index}`);
       return match2.index;
+    }
+    
+    // 3. Chercher le texte qui peut être fragmenté sur plusieurs balises <w:t>
+    // Par exemple "Formations & Certifications" pourrait être en plusieurs <w:t>
+    const words = variant.split(/[\s&]+/);
+    if (words.length > 1) {
+      const firstWord = escapeRegex(words[0]);
+      const firstWordRegex = new RegExp(`<w:t[^>]*>[^<]*${firstWord}[^<]*</w:t>`, 'i');
+      const firstMatch = xml.match(firstWordRegex);
+      
+      if (firstMatch && firstMatch.index !== undefined) {
+        // Vérifier si les autres mots suivent dans les 500 caractères suivants
+        const searchArea = xml.substring(firstMatch.index, firstMatch.index + 500);
+        let allWordsFound = true;
+        
+        for (let i = 1; i < words.length; i++) {
+          const wordRegex = new RegExp(escapeRegex(words[i]), 'i');
+          if (!wordRegex.test(searchArea)) {
+            allWordsFound = false;
+            break;
+          }
+        }
+        
+        if (allWordsFound) {
+          console.log(`[findTextPosition] Found fragmented match starting at position ${firstMatch.index}`);
+          return firstMatch.index;
+        }
+      }
     }
   }
   
