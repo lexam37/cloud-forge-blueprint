@@ -2,7 +2,6 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.75.0";
 import { z } from "https://deno.land/x/zod@v3.21.4/mod.ts";
 import JSZip from "https://esm.sh/jszip@3.10.1";
-import { parseStringPromise, Builder } from "https://esm.sh/xml2js@0.6.2";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -43,7 +42,6 @@ serve(async (req: Request) => {
 
     console.log('[generate-cv-word] User authenticated:', user.id);
 
-    // Récupérer le document CV
     const { data: cvDoc, error: cvError } = await supabase
       .from('cv_documents')
       .select('*')
@@ -67,7 +65,6 @@ serve(async (req: Request) => {
       throw new Error('No template selected for this CV');
     }
 
-    // Récupérer le template
     const { data: template, error: templateError } = await supabase
       .from('cv_templates')
       .select('file_path, structure_data, name')
@@ -81,7 +78,6 @@ serve(async (req: Request) => {
 
     console.log('[generate-cv-word] Using template:', template.name);
 
-    // Télécharger le fichier template
     const { data: templateFile, error: downloadError } = await supabase
       .storage
       .from('cv-templates')
@@ -95,8 +91,7 @@ serve(async (req: Request) => {
     const templateBuffer = await templateFile.arrayBuffer();
     console.log('[generate-cv-word] Template downloaded, size:', templateBuffer.byteLength, 'bytes');
 
-    // Générer le CV
-    const generatedBuffer = await generateCVWithXml2js(
+    const generatedBuffer = await generateCV(
       templateBuffer,
       extractedData,
       template.structure_data
@@ -104,7 +99,6 @@ serve(async (req: Request) => {
 
     console.log('[generate-cv-word] CV generated successfully');
 
-    // Upload le fichier généré
     const fileName = `CV_${extractedData.header?.title?.replace(/[^a-zA-Z0-9]/g, '_') || 'Document'}_${Date.now()}.docx`;
     const filePath = `${user.id}/${fileName}`;
 
@@ -125,7 +119,6 @@ serve(async (req: Request) => {
 
     console.log('[generate-cv-word] File uploaded successfully');
 
-    // Mettre à jour le document avec le chemin du fichier généré
     const { error: updateError } = await supabase
       .from('cv_documents')
       .update({
@@ -168,56 +161,49 @@ serve(async (req: Request) => {
 });
 
 /**
- * Génère le CV en utilisant xml2js pour manipuler le XML de manière structurée
+ * Génère le CV en clonant un paragraphe template par section
  */
-async function generateCVWithXml2js(
+async function generateCV(
   templateBuffer: ArrayBuffer,
   cvData: any,
   templateStructure: any
 ) {
-  console.log('[generateCV] Starting with xml2js approach');
-  console.log('[generateCV] Template structure:', JSON.stringify(templateStructure, null, 2));
+  console.log('[generateCV] Starting simple clone approach');
   
   const zip = new JSZip();
   await zip.loadAsync(templateBuffer);
   
-  // Extraire document.xml
   const docXml = await zip.file("word/document.xml")?.async("string");
   if (!docXml) throw new Error("Cannot extract document.xml from template");
   
-  // Parser le XML en objet JavaScript
-  const doc = await parseStringPromise(docXml, {
-    explicitArray: true,
-    preserveChildrenOrder: true,
-    xmlns: true
-  });
+  let modifiedXml = docXml;
   
-  if (!doc['w:document'] || !doc['w:document']['w:body']) {
-    throw new Error('Invalid Word document structure');
+  // === ÉTAPE 1: Remplacer le header ===
+  modifiedXml = replaceHeader(modifiedXml, cvData);
+  
+  // === ÉTAPE 2: Remplacer les sections (de la fin vers le début) ===
+  const sections = templateStructure?.sections || [];
+  
+  // Trouver toutes les positions de sections
+  const sectionPositions = sections.map((section: any) => ({
+    ...section,
+    position: findSectionPosition(modifiedXml, section.title)
+  })).filter((s: any) => s.position !== -1);
+  
+  // Trier par position décroissante
+  sectionPositions.sort((a: any, b: any) => b.position - a.position);
+  
+  console.log('[generateCV] Processing sections:', sectionPositions.map((s: any) => s.name).join(', '));
+  
+  for (const section of sectionPositions) {
+    console.log(`[generateCV] Processing: ${section.name}`);
+    modifiedXml = replaceSection(modifiedXml, section, cvData);
   }
   
-  const body = doc['w:document']['w:body'][0];
-  const paragraphs = body['w:p'] || [];
+  console.log('[generateCV] All sections replaced');
   
-  console.log(`[generateCV] Found ${paragraphs.length} paragraphs in document`);
+  zip.file("word/document.xml", modifiedXml);
   
-  // === ÉTAPE 1: Remplacer le header (trigram et titre) ===
-  await replaceHeader(paragraphs, cvData);
-  
-  // === ÉTAPE 2: Remplacer les sections ===
-  await replaceSections(paragraphs, cvData, templateStructure);
-  
-  // Rebuilder le XML
-  const builder = new Builder({
-    xmldec: { version: '1.0', encoding: 'UTF-8', standalone: true },
-    renderOpts: { pretty: false }
-  });
-  const newXml = builder.buildObject(doc);
-  
-  // Réinsérer le XML modifié
-  zip.file("word/document.xml", newXml);
-  
-  // Générer le nouveau fichier
   const generatedBuffer = await zip.generateAsync({ 
     type: "uint8array",
     compression: "DEFLATE"
@@ -231,116 +217,53 @@ async function generateCVWithXml2js(
 /**
  * Remplace le header (trigram et titre)
  */
-async function replaceHeader(paragraphs: any[], cvData: any) {
-  console.log('[replaceHeader] Starting header replacement');
+function replaceHeader(xml: string, cvData: any): string {
+  let result = xml;
   
   const trigram = cvData.header?.trigram || cvData.trigramme || '';
   const title = cvData.header?.title || cvData.titre_poste || '';
   
-  let trigramFound = false;
-  let titleFound = false;
+  // Remplacer le trigram
+  if (trigram) {
+    const trigramRegex = /<w:t[^>]*>[A-Z]{3}<\/w:t>/;
+    result = result.replace(trigramRegex, `<w:t>${escapeXml(trigram)}</w:t>`);
+    console.log('[replaceHeader] Replaced trigram with:', trigram);
+  }
   
-  // Parcourir les premiers paragraphes pour trouver le header
-  for (let i = 0; i < Math.min(20, paragraphs.length); i++) {
-    const para = paragraphs[i];
-    const text = extractTextFromParagraph(para);
+  // Remplacer le titre
+  if (title) {
+    // Trouver le premier texte long après le trigram
+    const afterTrigram = result.indexOf(trigram) + trigram.length;
+    const searchArea = result.substring(afterTrigram, afterTrigram + 2000);
+    const titleMatch = searchArea.match(/<w:t[^>]*>([^<]{10,})<\/w:t>/);
     
-    // Remplacer le trigram (chercher 3 lettres majuscules)
-    if (!trigramFound && /^[A-Z]{3}$/.test(text.trim()) && trigram) {
-      replaceTextInParagraph(para, trigram);
-      trigramFound = true;
-      console.log('[replaceHeader] Replaced trigram:', text, '->', trigram);
-    }
-    
-    // Remplacer le titre (texte long après le trigram)
-    if (trigramFound && !titleFound && text.length > 10 && title) {
-      replaceTextInParagraph(para, title);
-      titleFound = true;
-      console.log('[replaceHeader] Replaced title:', text.substring(0, 30), '->', title);
-      break;
+    if (titleMatch) {
+      const oldTitle = titleMatch[1];
+      const replaceRegex = new RegExp(`(<w:t[^>]*>)${escapeRegex(oldTitle)}(<\/w:t>)`, 'g');
+      result = result.replace(replaceRegex, `$1${escapeXml(title)}$2`);
+      console.log('[replaceHeader] Replaced title:', oldTitle, '->', title);
     }
   }
+  
+  return result;
 }
 
 /**
- * Remplace les sections du document
+ * Trouve la position d'une section
  */
-async function replaceSections(paragraphs: any[], cvData: any, templateStructure: any) {
-  console.log('[replaceSections] Starting section replacement');
-  
-  const sections = templateStructure?.sections || [];
-  
-  for (const section of sections) {
-    console.log(`[replaceSections] Processing section: ${section.name} (${section.title})`);
-    
-    // Trouver l'index du paragraphe de titre de section
-    const sectionIndex = findSectionIndex(paragraphs, section.title);
-    
-    if (sectionIndex === -1) {
-      console.warn(`[replaceSections] Section "${section.title}" not found`);
-      continue;
-    }
-    
-    console.log(`[replaceSections] Found section at index ${sectionIndex}`);
-    
-    // Trouver l'index de la prochaine section
-    const nextSectionIndex = findNextSectionIndex(paragraphs, sectionIndex + 1);
-    
-    console.log(`[replaceSections] Content range: ${sectionIndex + 1} to ${nextSectionIndex} (${nextSectionIndex - sectionIndex - 1} paragraphs)`);
-    
-    // Extraire les paragraphes template de cette section
-    const templateParagraphs = paragraphs.slice(sectionIndex + 1, nextSectionIndex);
-    
-    if (templateParagraphs.length === 0) {
-      console.warn(`[replaceSections] No template paragraphs found for section ${section.name}`);
-      continue;
-    }
-    
-    console.log(`[replaceSections] Extracted ${templateParagraphs.length} template paragraphs`);
-    
-    // Générer les nouveaux paragraphes selon le type de section
-    let newParagraphs: any[] = [];
-    
-    if (section.placeholderType === 'competences') {
-      newParagraphs = generateSkillsParagraphs(cvData, templateParagraphs);
-    } else if (section.placeholderType === 'formations') {
-      newParagraphs = generateFormationsParagraphs(cvData, templateParagraphs);
-    } else if (section.placeholderType === 'missions') {
-      newParagraphs = generateMissionsParagraphs(cvData, templateParagraphs);
-    }
-    
-    console.log(`[replaceSections] Generated ${newParagraphs.length} new paragraphs for ${section.name}`);
-    
-    // Remplacer les anciens paragraphes par les nouveaux
-    const deleteCount = nextSectionIndex - sectionIndex - 1;
-    paragraphs.splice(sectionIndex + 1, deleteCount, ...newParagraphs);
-    
-    console.log(`[replaceSections] Replaced ${deleteCount} paragraphs with ${newParagraphs.length} new ones`);
-  }
-}
-
-/**
- * Trouve l'index d'une section dans les paragraphes
- */
-function findSectionIndex(paragraphs: any[], sectionTitle: string): number {
+function findSectionPosition(xml: string, sectionTitle: string): number {
+  // Chercher le titre exact ou le premier mot
   const searchTerms = [sectionTitle];
-  
-  // Ajouter le premier mot si c'est un titre composé
-  const words = sectionTitle.split(/[\s&]+/).filter(w => w.length > 2);
-  if (words.length > 0) {
-    searchTerms.push(words[0]);
+  const firstWord = sectionTitle.split(/[\s&]+/)[0];
+  if (firstWord && firstWord.length > 2) {
+    searchTerms.push(firstWord);
   }
   
-  for (let i = 0; i < paragraphs.length; i++) {
-    const text = extractTextFromParagraph(paragraphs[i]);
-    
-    // Vérifier si c'est un titre de section (texte bold, grande taille)
-    if (isParagraphBold(paragraphs[i]) && getParagraphFontSize(paragraphs[i]) >= 32) {
-      for (const term of searchTerms) {
-        if (text.toLowerCase().includes(term.toLowerCase())) {
-          return i;
-        }
-      }
+  for (const term of searchTerms) {
+    const regex = new RegExp(`<w:t[^>]*>${escapeRegex(term)}`, 'i');
+    const match = xml.match(regex);
+    if (match && match.index !== undefined) {
+      return match.index;
     }
   }
   
@@ -348,246 +271,204 @@ function findSectionIndex(paragraphs: any[], sectionTitle: string): number {
 }
 
 /**
- * Trouve l'index de la prochaine section principale
+ * Remplace le contenu d'une section
  */
-function findNextSectionIndex(paragraphs: any[], startIndex: number): number {
-  const sectionKeywords = ['Compétences', 'Formations', 'Certifications', 'Expérience', 'Formation'];
+function replaceSection(xml: string, section: any, cvData: any): string {
+  const sectionPos = section.position;
   
-  for (let i = startIndex; i < paragraphs.length; i++) {
-    const text = extractTextFromParagraph(paragraphs[i]);
+  // Trouver le début du paragraphe de titre
+  const titlePStart = xml.lastIndexOf('<w:p', sectionPos);
+  const titlePEnd = xml.indexOf('</w:p>', sectionPos) + 6;
+  
+  // Extraire UN SEUL paragraphe template après le titre
+  const templatePStart = xml.indexOf('<w:p', titlePEnd);
+  const templatePEnd = xml.indexOf('</w:p>', templatePStart) + 6;
+  const templateParagraph = xml.substring(templatePStart, templatePEnd);
+  
+  console.log(`[replaceSection] Template paragraph length: ${templateParagraph.length}`);
+  
+  // Trouver la fin de la section (prochaine section principale)
+  const sectionEnd = findNextSectionPosition(xml, titlePEnd);
+  
+  // Générer le nouveau contenu
+  const newContent = generateSectionContent(section, cvData, templateParagraph);
+  
+  console.log(`[replaceSection] Generated ${newContent.length} chars for ${section.name}`);
+  
+  // Remplacer
+  const before = xml.substring(0, titlePEnd);
+  const after = xml.substring(sectionEnd);
+  
+  return before + newContent + after;
+}
+
+/**
+ * Trouve la position de la prochaine section principale
+ */
+function findNextSectionPosition(xml: string, startPos: number): number {
+  const sectionTitles = ['Compétences', 'Formations', 'Certifications', 'Expérience', 'Formation'];
+  
+  let pos = startPos;
+  for (let i = 0; i < 50; i++) {
+    const nextP = xml.indexOf('<w:p', pos);
+    if (nextP === -1) return xml.indexOf('</w:body>', startPos);
     
-    // Vérifier si c'est un titre de section principale
-    if (isParagraphBold(paragraphs[i]) && getParagraphFontSize(paragraphs[i]) >= 32) {
-      for (const keyword of sectionKeywords) {
-        if (text.toLowerCase().includes(keyword.toLowerCase())) {
-          return i;
+    const nextPEnd = xml.indexOf('</w:p>', nextP) + 6;
+    const paragraph = xml.substring(nextP, nextPEnd);
+    
+    // Vérifier si c'est un titre de section
+    if (paragraph.includes('<w:b') || paragraph.includes('<w:b ')) {
+      const textMatch = paragraph.match(/<w:t[^>]*>([^<]+)<\/w:t>/);
+      if (textMatch) {
+        const text = textMatch[1];
+        for (const title of sectionTitles) {
+          if (text.toLowerCase().includes(title.toLowerCase())) {
+            return nextP;
+          }
         }
       }
     }
+    
+    pos = nextPEnd;
   }
   
-  return paragraphs.length;
+  return xml.indexOf('</w:body>', startPos);
 }
 
 /**
- * Génère les paragraphes pour la section Compétences
+ * Génère le contenu d'une section
  */
-function generateSkillsParagraphs(cvData: any, templateParagraphs: any[]): any[] {
-  const result: any[] = [];
-  const basePara = templateParagraphs[0];
+function generateSectionContent(section: any, cvData: any, templateParagraph: string): string {
+  if (section.placeholderType === 'competences') {
+    return generateCompetences(cvData, templateParagraph);
+  } else if (section.placeholderType === 'formations') {
+    return generateFormations(cvData, templateParagraph);
+  } else if (section.placeholderType === 'missions') {
+    return generateMissions(cvData, templateParagraph);
+  }
   
-  // Essayer skills.subcategories d'abord
+  return '';
+}
+
+/**
+ * Génère les compétences
+ */
+function generateCompetences(cvData: any, templatePara: string): string {
+  const lines: string[] = [];
+  
   if (cvData.skills?.subcategories) {
     for (const subcat of cvData.skills.subcategories) {
       const text = `${subcat.name}: ${subcat.items.join(', ')}`;
-      result.push(cloneParagraphWithNewText(basePara, text));
+      lines.push(cloneParagraph(templatePara, text));
     }
-  }
-  // Sinon essayer competences
-  else if (cvData.competences) {
+  } else if (cvData.competences) {
     for (const comp of cvData.competences) {
-      if (comp.category || comp.categorie) {
-        const categoryText = comp.category || comp.categorie;
-        result.push(cloneParagraphWithNewText(basePara, categoryText));
+      if (comp.category) {
+        lines.push(cloneParagraph(templatePara, comp.category));
       }
-      
       if (comp.skills) {
         const skillsText = Array.isArray(comp.skills) ? comp.skills.join(', ') : comp.skills;
-        result.push(cloneParagraphWithNewText(basePara, skillsText));
-      } else if (comp.items) {
-        const itemsText = Array.isArray(comp.items) ? comp.items.join(', ') : comp.items;
-        result.push(cloneParagraphWithNewText(basePara, itemsText));
+        lines.push(cloneParagraph(templatePara, skillsText));
       }
     }
   }
   
-  return result;
+  return lines.join('');
 }
 
 /**
- * Génère les paragraphes pour la section Formations
+ * Génère les formations
  */
-function generateFormationsParagraphs(cvData: any, templateParagraphs: any[]): any[] {
-  const result: any[] = [];
-  const basePara = templateParagraphs[0];
+function generateFormations(cvData: any, templatePara: string): string {
+  const lines: string[] = [];
   
-  // Essayer education d'abord
   if (cvData.education && cvData.education.length > 0) {
     for (const edu of cvData.education) {
       const text = `${edu.year || ''} ${edu.degree || ''} - ${edu.institution || ''} ${edu.location || ''}`.trim();
-      result.push(cloneParagraphWithNewText(basePara, text));
+      lines.push(cloneParagraph(templatePara, text));
     }
-  }
-  // Sinon essayer formations
-  else if (cvData.formations && cvData.formations.length > 0) {
+  } else if (cvData.formations && cvData.formations.length > 0) {
     for (const formation of cvData.formations) {
       const text = `${formation.annee || ''} ${formation.titre || ''} - ${formation.etablissement || ''}`.trim();
-      result.push(cloneParagraphWithNewText(basePara, text));
+      lines.push(cloneParagraph(templatePara, text));
     }
   }
   
-  return result;
+  return lines.join('');
 }
 
 /**
- * Génère les paragraphes pour la section Missions/Expériences
+ * Génère les missions
  */
-function generateMissionsParagraphs(cvData: any, templateParagraphs: any[]): any[] {
-  const result: any[] = [];
-  const normalPara = templateParagraphs[0];
-  const bulletPara = templateParagraphs.find(p => isParagraphBulleted(p)) || normalPara;
-  
+function generateMissions(cvData: any, templatePara: string): string {
+  const lines: string[] = [];
   const missions = cvData.missions || [];
   
+  // Extraire aussi un paragraphe à puces si disponible
+  const bulletPara = templatePara.includes('numPr') ? templatePara : templatePara;
+  
   for (const mission of missions) {
-    // En-tête de mission
+    // En-tête
     const periode = mission.periode || `${mission.date_start || ''} - ${mission.date_end || ''}`;
     const role = mission.role || mission.titre || '';
     const client = mission.client || mission.entreprise || '';
     const location = mission.location || '';
     
     const header = `${periode} | ${role} | ${client} ${location}`.trim();
-    result.push(cloneParagraphWithNewText(normalPara, header));
+    lines.push(cloneParagraph(templatePara, header));
     
     // Contexte
     if (mission.context || mission.contexte) {
-      const context = mission.context || mission.contexte;
-      result.push(cloneParagraphWithNewText(normalPara, context));
+      lines.push(cloneParagraph(templatePara, mission.context || mission.contexte));
     }
     
-    // Achievements / Missions (liste à puces)
+    // Achievements
     const achievements = mission.achievements || mission.missions || [];
     for (const achievement of achievements) {
-      result.push(cloneParagraphWithNewText(bulletPara, achievement));
+      lines.push(cloneParagraph(bulletPara, achievement));
     }
     
     // Environnement
-    if (mission.environment || mission.environnement) {
-      const env = mission.environment || mission.environnement;
-      const envText = Array.isArray(env) && env.length > 0 ? `Environnement: ${env.join(', ')}` : '';
-      if (envText) {
-        result.push(cloneParagraphWithNewText(normalPara, envText));
-      }
+    if (mission.environment && mission.environment.length > 0) {
+      const envText = `Environnement: ${mission.environment.join(', ')}`;
+      lines.push(cloneParagraph(templatePara, envText));
     }
   }
   
-  return result;
+  return lines.join('');
 }
 
 /**
- * Clone un paragraphe et remplace son texte
+ * Clone un paragraphe avec un nouveau texte
  */
-function cloneParagraphWithNewText(paragraph: any, newText: string): any {
-  // Deep clone du paragraphe
-  const cloned = JSON.parse(JSON.stringify(paragraph));
+function cloneParagraph(paragraph: string, newText: string): string {
+  // Remplacer TOUS les <w:t> par le nouveau texte dans le premier, vider les autres
+  let replaced = false;
   
-  // Remplacer le texte
-  replaceTextInParagraph(cloned, newText);
-  
-  return cloned;
-}
-
-/**
- * Extrait le texte d'un paragraphe
- */
-function extractTextFromParagraph(paragraph: any): string {
-  const texts: string[] = [];
-  
-  if (paragraph['w:r']) {
-    for (const run of paragraph['w:r']) {
-      if (run['w:t']) {
-        for (const t of run['w:t']) {
-          if (typeof t === 'string') {
-            texts.push(t);
-          } else if (t._) {
-            texts.push(t._);
-          }
-        }
-      }
+  return paragraph.replace(/<w:t([^>]*)>([^<]*)<\/w:t>/g, (match, attrs, oldText) => {
+    if (!replaced) {
+      replaced = true;
+      return `<w:t${attrs}>${escapeXml(newText)}</w:t>`;
     }
-  }
-  
-  return texts.join('');
+    return `<w:t${attrs}></w:t>`;
+  });
 }
 
 /**
- * Remplace le texte dans un paragraphe (modifie en place)
+ * Échappe les caractères XML
  */
-function replaceTextInParagraph(paragraph: any, newText: string) {
-  if (!paragraph['w:r'] || paragraph['w:r'].length === 0) {
-    return;
-  }
-  
-  // Mettre tout le texte dans le premier run, vider les autres
-  let firstTextFound = false;
-  
-  for (const run of paragraph['w:r']) {
-    if (run['w:t']) {
-      for (let i = 0; i < run['w:t'].length; i++) {
-        if (!firstTextFound) {
-          // Premier texte: remplacer par le nouveau
-          if (typeof run['w:t'][i] === 'string') {
-            run['w:t'][i] = newText;
-          } else {
-            run['w:t'][i]._ = newText;
-          }
-          firstTextFound = true;
-        } else {
-          // Autres textes: vider
-          if (typeof run['w:t'][i] === 'string') {
-            run['w:t'][i] = '';
-          } else {
-            run['w:t'][i]._ = '';
-          }
-        }
-      }
-    }
-  }
+function escapeXml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
 }
 
 /**
- * Vérifie si un paragraphe est en gras
+ * Échappe les caractères spéciaux pour regex
  */
-function isParagraphBold(paragraph: any): boolean {
-  if (!paragraph['w:r']) return false;
-  
-  for (const run of paragraph['w:r']) {
-    if (run['w:rPr'] && run['w:rPr'][0] && run['w:rPr'][0]['w:b']) {
-      return true;
-    }
-  }
-  
-  return false;
-}
-
-/**
- * Obtient la taille de police d'un paragraphe
- */
-function getParagraphFontSize(paragraph: any): number {
-  if (!paragraph['w:r']) return 20;
-  
-  for (const run of paragraph['w:r']) {
-    if (run['w:rPr'] && run['w:rPr'][0] && run['w:rPr'][0]['w:sz']) {
-      const sz = run['w:rPr'][0]['w:sz'][0];
-      if (sz.$) {
-        return parseInt(sz.$['w:val']) || 20;
-      }
-    }
-  }
-  
-  return 20;
-}
-
-/**
- * Vérifie si un paragraphe a des puces
- */
-function isParagraphBulleted(paragraph: any): boolean {
-  if (!paragraph['w:pPr']) return false;
-  
-  const pPr = paragraph['w:pPr'][0];
-  if (pPr && pPr['w:numPr']) {
-    return true;
-  }
-  
-  return false;
+function escapeRegex(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
