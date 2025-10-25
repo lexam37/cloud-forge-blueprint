@@ -242,8 +242,21 @@ async function generateCVWithJSZip(
   }
   
   // === REMPLACEMENT DES SECTIONS ===
-  for (const section of templateStructure.sections || []) {
-    console.log(`[generateCVWithJSZip] Processing section: ${section.name}`);
+  // Trouver les positions de toutes les sections d'abord
+  const sectionsWithPositions = (templateStructure.sections || []).map((section: any) => {
+    const position = findTextPosition(modifiedXml, section.title);
+    return { ...section, position };
+  }).filter((s: any) => s.position !== -1);
+  
+  // Trier par position DÉCROISSANTE pour traiter de la fin vers le début
+  // Cela évite que les modifications changent les positions des sections précédentes
+  sectionsWithPositions.sort((a: any, b: any) => b.position - a.position);
+  
+  console.log('[generateCVWithJSZip] Sections will be processed in this order (end to start):',
+    sectionsWithPositions.map((s: any) => `${s.name}@${s.position}`).join(', '));
+  
+  for (const section of sectionsWithPositions) {
+    console.log(`[generateCVWithJSZip] Processing section: ${section.name} at position ${section.position}`);
     
     // Extraire les paragraphes exemple du template pour cette section
     const templateParagraphs = extractSectionParagraphs(modifiedXml, section.title, 3);
