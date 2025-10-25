@@ -56,7 +56,7 @@ export const CVHistoryList = () => {
           // Supprimer le fichier généré s'il existe
           if (cv.generated_file_path) {
             const { error: generatedError } = await supabase.storage
-              .from('cv-generated')
+              .from('cv-outputs')
               .remove([cv.generated_file_path]);
             if (generatedError) {
               console.error(`Erreur suppression fichier généré ${cv.generated_file_path}:`, generatedError);
@@ -228,7 +228,7 @@ export const CVHistoryList = () => {
 
       // Télécharger le fichier généré
       const { data: fileData, error: downloadError } = await supabase.storage
-        .from('cv-generated')
+        .from('cv-outputs')
         .download(data.filePath);
 
       if (downloadError) throw downloadError;
@@ -274,7 +274,7 @@ export const CVHistoryList = () => {
 
       // Télécharger directement le fichier déjà généré
       const { data: fileData, error: downloadError } = await supabase.storage
-        .from('cv-generated')
+        .from('cv-outputs')
         .download(cv.generated_file_path);
 
       if (downloadError) throw downloadError;
@@ -322,7 +322,7 @@ export const CVHistoryList = () => {
       // Supprimer le fichier généré s'il existe
       if (cv.generated_file_path) {
         await supabase.storage
-          .from('cv-generated')
+          .from('cv-outputs')
           .remove([cv.generated_file_path]);
       }
 
