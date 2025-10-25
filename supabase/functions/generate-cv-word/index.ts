@@ -316,7 +316,7 @@ async function generateCVWithJSZip(
 /**
  * Extrait les paragraphes complets d'une section avec leur XML de style
  */
-function extractSectionParagraphs(xml: string, sectionTitle: string, maxCount: number = 3): string[] {
+function extractSectionParagraphs(xml: string, sectionTitle: string, maxCount: number = 20): string[] {
   console.log(`[extractSectionParagraphs] Extracting paragraphs for: "${sectionTitle}"`);
   
   // Trouver le titre de section - essayer d'abord le titre complet
@@ -324,18 +324,20 @@ function extractSectionParagraphs(xml: string, sectionTitle: string, maxCount: n
   
   // Si non trouvé, essayer juste le premier mot (ex: "Formations" au lieu de "Formations & Certifications")
   if (titlePos === -1) {
-    const mainWord = sectionTitle.split(/[\s&]+/)[0]; // Split par espace ou &
-    console.log(`[extractSectionParagraphs] Section not found: "${sectionTitle}", trying main word: "${mainWord}"`);
-    titlePos = findTextPosition(xml, mainWord);
+    const words = sectionTitle.split(/[\s&]+/).filter(w => w.length > 2);
+    if (words.length > 0) {
+      const mainWord = words[0];
+      console.log(`[extractSectionParagraphs] Section not found: "${sectionTitle}", trying main word: "${mainWord}"`);
+      titlePos = findTextPosition(xml, mainWord);
+    }
     
     if (titlePos === -1) {
-      console.warn(`[extractSectionParagraphs] Could not find section with title "${sectionTitle}" or main word "${mainWord}"`);
+      console.warn(`[extractSectionParagraphs] Could not find section with title "${sectionTitle}"`);
       return [];
     }
   }
   
   console.log(`[extractSectionParagraphs] Found section at position: ${titlePos}`);
-  console.log(`[extractSectionParagraphs] Context:`, xml.substring(Math.max(0, titlePos - 50), titlePos + 150));
   
   // Extraire les paragraphes qui suivent
   const paragraphs: string[] = [];
@@ -350,31 +352,34 @@ function extractSectionParagraphs(xml: string, sectionTitle: string, maxCount: n
   currentPos = titlePEnd + 6;
   console.log(`[extractSectionParagraphs] Starting paragraph extraction from position: ${currentPos}`);
   
-  // Extraire les N paragraphes suivants
+  // Extraire les paragraphes jusqu'à trouver le prochain titre de section
   for (let i = 0; i < maxCount; i++) {
     const pStart = xml.indexOf('<w:p', currentPos);
     if (pStart === -1) {
-      console.log(`[extractSectionParagraphs] No more paragraphs found (iteration ${i})`);
       break;
     }
     
     const pEnd = xml.indexOf('</w:p>', pStart);
     if (pEnd === -1) {
-      console.log(`[extractSectionParagraphs] Could not find paragraph end (iteration ${i})`);
       break;
     }
     
     const paragraph = xml.substring(pStart, pEnd + 6);
     
-    // Extraire le texte du paragraphe pour debug
-    const textMatch = paragraph.match(/<w:t[^>]*>([^<]+)<\/w:t>/);
-    const paragraphText = textMatch ? textMatch[1] : '(no text)';
-    console.log(`[extractSectionParagraphs] Paragraph ${i + 1} text:`, paragraphText.substring(0, 100));
+    // Extraire le texte du paragraphe
+    const textMatches = paragraph.match(/<w:t[^>]*>([^<]+)<\/w:t>/g);
+    const paragraphText = textMatches ? textMatches.map(m => m.replace(/<[^>]+>/g, '')).join('').trim() : '';
     
-    // Vérifier que ce n'est pas une nouvelle section (titre en gras)
-    const hasNextSectionTitle = /<w:t[^>]*>(?:Compétences|Expérience|Formations?|Certifications?|Langues?|Profil|Contact|Éducation|Projets?)<\/w:t>/i.test(paragraph);
-    if (hasNextSectionTitle) {
-      console.log(`[extractSectionParagraphs] Found next section title, stopping extraction`);
+    console.log(`[extractSectionParagraphs] Paragraph ${i + 1} text: ${paragraphText.substring(0, 50) || '(empty)'}`);
+    
+    // Vérifier si c'est un titre de section (en gras + taille >= 32)
+    const isBold = paragraph.includes('<w:b/>') || paragraph.includes('<w:b ');
+    const sizeMatch = paragraph.match(/<w:sz w:val="(\d+)"\/>/);
+    const fontSize = sizeMatch ? parseInt(sizeMatch[1]) : 20;
+    
+    // Si c'est un titre (gras + grande taille + texte significatif), on s'arrête
+    if (isBold && fontSize >= 32 && paragraphText.length > 3) {
+      console.log(`[extractSectionParagraphs] Found next section title "${paragraphText.substring(0, 30)}", stopping`);
       break;
     }
     
@@ -395,69 +400,71 @@ function findTextPosition(xml: string, text: string): number {
   // Nettoyer le texte recherché
   const cleanText = text.replace(/\s+/g, ' ').trim();
   
-  // Créer toutes les variations possibles du texte
-  const variations = [
-    cleanText,
-    cleanText.replace(/&/g, '&amp;'),
-    cleanText.replace(/&amp;/g, '&'),
-    // Encoder les accents en entités XML
-    cleanText.replace(/é/g, '&#xE9;').replace(/è/g, '&#xE8;').replace(/à/g, '&#xE0;').replace(/ê/g, '&#xEA;').replace(/ô/g, '&#xF4;'),
-    // Sans accents
-    cleanText.replace(/[éèê]/g, 'e').replace(/[à]/g, 'a').replace(/[ô]/g, 'o'),
-  ];
+  // Extraire le premier mot significatif (pour chercher juste ce mot au lieu du titre complet)
+  const firstWord = cleanText.split(/[\s&]+/).filter(w => w.length > 2)[0];
   
-  // Essayer de trouver chaque variation
-  for (const variant of variations) {
-    const escapedVariant = escapeRegex(variant);
+  // Créer toutes les variations possibles du texte complet ET du premier mot
+  const textsToSearch = [cleanText];
+  if (firstWord && firstWord !== cleanText) {
+    textsToSearch.push(firstWord);
+  }
+  
+  for (const searchText of textsToSearch) {
+    const variations = [
+      searchText,
+      searchText.replace(/&/g, '&amp;'),
+      searchText.replace(/&amp;/g, '&'),
+      // Encoder les accents en entités XML
+      searchText.replace(/é/g, '&#xE9;').replace(/è/g, '&#xE8;').replace(/à/g, '&#xE0;').replace(/ê/g, '&#xEA;').replace(/ô/g, '&#xF4;'),
+      // Sans accents
+      searchText.replace(/[éèê]/g, 'e').replace(/[àâ]/g, 'a').replace(/[ô]/g, 'o').replace(/[î]/g, 'i'),
+    ];
     
-    // 1. Chercher match exact dans une seule balise <w:t>
-    const exactRegex = new RegExp(`<w:t[^>]*>${escapedVariant}</w:t>`, 'i');
-    const match1 = xml.match(exactRegex);
-    if (match1 && match1.index !== undefined) {
-      console.log(`[findTextPosition] Found exact match with variant "${variant}" at position ${match1.index}`);
-      return match1.index;
-    }
-    
-    // 2. Chercher match partiel (texte plus long contenant notre recherche)
-    const partialRegex = new RegExp(`<w:t[^>]*>[^<]*${escapedVariant}[^<]*</w:t>`, 'i');
-    const match2 = xml.match(partialRegex);
-    if (match2 && match2.index !== undefined) {
-      console.log(`[findTextPosition] Found partial match with variant "${variant}" at position ${match2.index}`);
-      return match2.index;
-    }
-    
-    // 3. Chercher le texte qui peut être fragmenté sur plusieurs balises <w:t>
-    const words = variant.split(/[\s&]+/).filter(w => w.length > 0);
-    if (words.length > 1) {
-      const firstWord = escapeRegex(words[0]);
-      const firstWordRegex = new RegExp(`<w:t[^>]*>[^<]*${firstWord}[^<]*</w:t>`, 'i');
-      const firstMatch = xml.match(firstWordRegex);
+    // Essayer de trouver chaque variation
+    for (const variant of variations) {
+      const escapedVariant = escapeRegex(variant);
       
-      if (firstMatch && firstMatch.index !== undefined) {
-        // Vérifier si les autres mots suivent dans les 1000 caractères suivants
-        const searchArea = xml.substring(firstMatch.index, firstMatch.index + 1000);
-        let allWordsFound = true;
-        
-        for (let i = 1; i < words.length; i++) {
-          const wordRegex = new RegExp(escapeRegex(words[i]), 'i');
-          if (!wordRegex.test(searchArea)) {
-            allWordsFound = false;
-            break;
-          }
-        }
-        
-        if (allWordsFound) {
-          console.log(`[findTextPosition] Found fragmented match starting at position ${firstMatch.index}`);
-          return firstMatch.index;
-        }
+      // 1. Chercher match exact dans une seule balise <w:t>
+      const exactRegex = new RegExp(`<w:t[^>]*>${escapedVariant}</w:t>`, 'i');
+      const match1 = xml.match(exactRegex);
+      if (match1 && match1.index !== undefined) {
+        console.log(`[findTextPosition] Found exact match with variant "${variant}" at position ${match1.index}`);
+        return match1.index;
       }
-    } else if (words.length === 1) {
-      // Un seul mot - chercher match partiel
-      const singleWordRegex = new RegExp(`<w:t[^>]*>[^<]*${escapedVariant}[^<]*</w:t>`, 'i');
-      const singleMatch = xml.match(singleWordRegex);
-      if (singleMatch && singleMatch.index !== undefined) {
-        console.log(`[findTextPosition] Found single word partial match at position ${singleMatch.index}`);
-        return singleMatch.index;
+      
+      // 2. Chercher match partiel (texte plus long contenant notre recherche)
+      const partialRegex = new RegExp(`<w:t[^>]*>[^<]*${escapedVariant}[^<]*</w:t>`, 'i');
+      const match2 = xml.match(partialRegex);
+      if (match2 && match2.index !== undefined) {
+        console.log(`[findTextPosition] Found partial match with variant "${variant}" at position ${match2.index}`);
+        return match2.index;
+      }
+      
+      // 3. Chercher dans le texte décodé (extraire tout le texte des balises <w:t>)
+      const textRegex = /<w:t[^>]*>([^<]+)<\/w:t>/gi;
+      let textMatch;
+      let concatenatedText = '';
+      let lastIndex = 0;
+      const positions: number[] = [];
+      
+      while ((textMatch = textRegex.exec(xml)) !== null) {
+        concatenatedText += textMatch[1];
+        positions.push(textMatch.index);
+        
+        // Vérifier si le texte concaténé contient notre recherche
+        const normalizedConcatenated = concatenatedText.replace(/\s+/g, ' ').trim();
+        const normalizedVariant = variant.replace(/\s+/g, ' ').trim();
+        
+        if (normalizedConcatenated.toLowerCase().includes(normalizedVariant.toLowerCase())) {
+          console.log(`[findTextPosition] Found in concatenated text at position ${positions[0]}`);
+          return positions[0];
+        }
+        
+        // Limiter la fenêtre de recherche à 500 caractères
+        if (concatenatedText.length > 500) {
+          concatenatedText = concatenatedText.substring(concatenatedText.length - 250);
+          positions.shift();
+        }
       }
     }
   }
@@ -624,10 +631,18 @@ function replaceSectionContent(xml: string, sectionTitle: string, newContent: st
   console.log(`[replaceSectionContent] Replacing section: ${sectionTitle}`);
   
   // Trouver le début de la section
-  const titlePos = findTextPosition(xml, sectionTitle);
+  let titlePos = findTextPosition(xml, sectionTitle);
   if (titlePos === -1) {
-    console.warn(`[replaceSectionContent] Section not found: ${sectionTitle}`);
-    return xml;
+    // Essayer avec le premier mot seulement
+    const words = sectionTitle.split(/[\s&]+/).filter(w => w.length > 2);
+    if (words.length > 0) {
+      titlePos = findTextPosition(xml, words[0]);
+    }
+    
+    if (titlePos === -1) {
+      console.warn(`[replaceSectionContent] Section not found: ${sectionTitle}`);
+      return xml;
+    }
   }
   
   // Trouver le début du paragraphe titre
@@ -640,19 +655,38 @@ function replaceSectionContent(xml: string, sectionTitle: string, newContent: st
   
   const contentStart = pEnd + 6;
   
-  // Trouver la fin de la section (prochain titre ou fin du body)
+  // Trouver la fin de la section en cherchant le prochain titre de section
   let contentEnd = xml.indexOf('</w:body>', contentStart);
   
-  // Chercher le prochain titre de section
-  const nextTitleRegex = /<w:p[^>]*>(?:[\s\S]*?)<w:t[^>]*>(?:Compétences|Expérience|Formations?|Certifications?|Langues?|Profil|Contact|Éducation|Projets?)<\/w:t>/i;
-  const match = nextTitleRegex.exec(xml.substring(contentStart));
+  // Chercher le prochain paragraphe avec du texte formaté comme un titre (gras + grande taille)
+  let searchPos = contentStart;
+  const maxSearch = 100; // Limiter la recherche à 100 paragraphes
   
-  if (match && match.index !== undefined) {
-    // Trouver le début du paragraphe de ce titre
-    const nextPStart = xml.lastIndexOf('<w:p', contentStart + match.index + 50);
-    if (nextPStart > contentStart) {
+  for (let i = 0; i < maxSearch; i++) {
+    const nextPStart = xml.indexOf('<w:p ', searchPos);
+    if (nextPStart === -1 || nextPStart >= contentEnd) break;
+    
+    const nextPEnd = xml.indexOf('</w:p>', nextPStart);
+    if (nextPEnd === -1) break;
+    
+    const paragraph = xml.substring(nextPStart, nextPEnd + 6);
+    
+    // Vérifier si c'est un titre (en gras + taille >= 32)
+    const isBold = paragraph.includes('<w:b/>') || paragraph.includes('<w:b ');
+    const sizeMatch = paragraph.match(/<w:sz w:val="(\d+)"\/>/);
+    const fontSize = sizeMatch ? parseInt(sizeMatch[1]) : 20;
+    
+    // Extraire le texte pour vérifier s'il est significatif
+    const textMatches = paragraph.match(/<w:t[^>]*>([^<]+)<\/w:t>/g);
+    const text = textMatches ? textMatches.map(m => m.replace(/<[^>]+>/g, '')).join('').trim() : '';
+    
+    if (isBold && fontSize >= 32 && text.length > 3) {
+      console.log(`[replaceSectionContent] Found next section at ${nextPStart}, text: "${text.substring(0, 30)}"`);
       contentEnd = nextPStart;
+      break;
     }
+    
+    searchPos = nextPEnd + 6;
   }
   
   console.log(`[replaceSectionContent] Content range: ${contentStart} to ${contentEnd} (${contentEnd - contentStart} chars)`);
